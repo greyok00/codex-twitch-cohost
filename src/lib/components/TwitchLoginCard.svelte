@@ -130,6 +130,27 @@
     }
   }
 
+  async function onSwitchStreamer() {
+    try {
+      if (!oauthConfigured) {
+        showAdvanced = true;
+        errorBannerStore.set('Set Twitch client ID first in OAuth Setup.');
+        return;
+      }
+      if (!$authSessionsStore.botTokenPresent) {
+        errorBannerStore.set('Connect Bot first, then switch Streamer account.');
+        return;
+      }
+      await connectTwitch(true, streamerAuthProfile, 'streamer');
+      setTimeout(() => {
+        void loadSavedOAuthSettings();
+        void loadAuthSessions();
+      }, 1200);
+    } catch (error) {
+      errorBannerStore.set('Streamer switch failed: ' + String(error));
+    }
+  }
+
   async function onConnectStreamer() {
     try {
       if (!oauthConfigured) {
@@ -314,6 +335,7 @@
     <div class="actions">
       <button class="btn" on:click={openBotLoginWindow}>🔐 Open Bot Login Window</button>
       <button class="btn" on:click={onSwitchBot}>🔄 Switch Bot Account</button>
+      <button class="btn" on:click={onSwitchStreamer}>🔄 Switch Streamer Account</button>
       <button class="btn" on:click={onResetAuth}>🧼 Reset Auth Sessions</button>
     </div>
   {/if}
