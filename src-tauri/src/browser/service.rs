@@ -56,6 +56,28 @@ fn browser_profiles_root(app: &AppHandle) -> PathBuf {
         .join("browser-profiles")
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn spawn_with_profile(
+    bin: &str,
+    args: &[&str],
+    profile_dir: &PathBuf,
+    url: &str,
+) -> AppResult<()> {
+    let profile = profile_dir.to_string_lossy().to_string();
+    let mut cmd = Command::new(bin);
+    for arg in args {
+        if *arg == "--user-data-dir" || *arg == "--profile" {
+            cmd.arg(arg).arg(&profile);
+        } else {
+            cmd.arg(arg);
+        }
+    }
+    cmd.arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| AppError::Url(format!("failed launching isolated browser: {e}")))
+}
+
 pub fn open_isolated_twitch_url(app: &AppHandle, profile_name: &str, url: &str) -> AppResult<()> {
     let parsed = Url::parse(url).map_err(|e| AppError::Url(format!("invalid URL: {e}")))?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
