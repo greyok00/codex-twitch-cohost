@@ -1,0 +1,285 @@
+:root {
+  --text: #e9eef7;
+  --muted: #b0b9c9;
+  --accent: #c3cbd8;
+  --ok: #4acf80;
+  --danger: #d86a6a;
+  --border: rgba(170, 179, 194, 0.28);
+  --panel: rgba(41, 46, 56, 0.54);
+  --panel-strong: rgba(29, 34, 42, 0.7);
+  --input-bg: rgba(20, 24, 31, 0.78);
+  --chip-bg: rgba(43, 49, 60, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(1300px 840px at 10% -10%, rgba(118, 134, 162, 0.2), transparent 60%),
+    radial-gradient(1200px 820px at 90% -10%, rgba(130, 141, 158, 0.16), transparent 58%),
+    linear-gradient(180deg, #232934 0%, #1a2029 52%, #0f1218 100%);
+}
+
+body {
+  background:
+    radial-gradient(1300px 840px at 10% -10%, rgba(118, 134, 162, 0.2), transparent 60%),
+    radial-gradient(1200px 820px at 90% -10%, rgba(130, 141, 158, 0.16), transparent 58%),
+    linear-gradient(180deg, #232934 0%, #1a2029 52%, #0f1218 100%);
+  color: var(--text);
+  font-family: var(--base-font-family);
+  overflow: auto;
+  position: relative;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  pointer-events: none;
+  background:
+    radial-gradient(42% 32% at 22% 20%, rgba(255, 255, 255, 0.2), transparent 62%),
+    radial-gradient(36% 34% at 78% 74%, rgba(255, 255, 255, 0.14), transparent 64%);
+  animation: bgFloat 20s ease-in-out infinite alternate;
+  z-index: -1;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+select,
+option,
+optgroup {
+  background: #1d2330 !important;
+  color: #e9eef7 !important;
+}
+
+select {
+  background-color: #1d2330 !important;
+  border-color: rgba(171, 183, 203, 0.38) !important;
+  color: #e9eef7 !important;
+  color-scheme: dark !important;
+}
+
+select:focus {
+  background-color: #222a38 !important;
+}
+
+select option,
+select optgroup {
+  background-color: #1d2330 !important;
+  color: #e9eef7 !important;
+}
+
+button,
+.btn {
+  background: linear-gradient(
+    180deg,
+    rgba(73, 84, 102, 0.76) 0%,
+    rgba(50, 58, 72, 0.86) 100%
+  );
+  border: 1px solid rgba(152, 167, 188, 0.36);
+  color: #ecf1f9;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(233, 240, 250, 0.08) inset;
+  backdrop-filter: blur(10px) saturate(125%);
+  -webkit-backdrop-filter: blur(10px) saturate(125%);
+  transition: transform 120ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+button:hover,
+.btn:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(85, 97, 118, 0.8) 0%,
+    rgba(58, 68, 84, 0.88) 100%
+  );
+  border-color: rgba(174, 188, 210, 0.45);
+  transform: translateY(-1px);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(237, 243, 252, 0.12) inset;
+}
+
+button:active,
+.btn:active {
+  transform: translateY(0);
+}
+
+.card {
+  background: linear-gradient(
+    180deg,
+    rgba(54, 61, 75, 0.52),
+    rgba(30, 36, 46, 0.58)
+  );
+  border: 1px solid rgba(171, 183, 203, 0.24);
+  border-radius: 14px;
+  box-shadow:
+    0 18px 36px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  backdrop-filter: blur(13px) saturate(125%);
+  -webkit-backdrop-filter: blur(13px) saturate(125%);
+  animation: riseIn 220ms ease both;
+}
+
+details.card,
+section.card {
+  background: linear-gradient(
+    180deg,
+    rgba(54, 61, 75, 0.46),
+    rgba(30, 36, 46, 0.54)
+  ) !important;
+  border-color: rgba(171, 183, 203, 0.26) !important;
+  backdrop-filter: blur(16px) saturate(130%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(130%) !important;
+}
+
+input,
+select,
+textarea {
+  background: linear-gradient(180deg, var(--input-bg), color-mix(in srgb, var(--input-bg) 86%, #000 14%));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.52rem 0.6rem;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--muted) 86%, #ccd6e8 14%);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #8ea3c3;
+  box-shadow:
+    0 0 0 1px rgba(152, 179, 220, 0.28),
+    0 10px 22px rgba(0, 0, 0, 0.24);
+}
+
+.chip {
+  background: var(--chip-bg);
+}
+
+/* Skeleton v2-style glass variants */
+.variant-glass-surface {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.06));
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(12px) saturate(130%);
+  -webkit-backdrop-filter: blur(12px) saturate(130%);
+}
+
+html.dark .variant-glass-surface {
+  background: linear-gradient(180deg, rgba(28, 36, 47, 0.52), rgba(24, 31, 42, 0.34));
+  border-color: rgba(186, 203, 226, 0.22);
+}
+
+small,
+.muted {
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+h3,
+summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  line-height: 1.2;
+}
+
+h3 {
+  font-size: 1.22rem;
+}
+
+summary {
+  font-size: 1.15rem;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.app-theme {
+  min-height: 100%;
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes bgFloat {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(1.2%, -1.6%, 0) scale(1.035);
+  }
+  100% {
+    transform: translate3d(-1.5%, 1.4%, 0) scale(1.028);
+  }
+}
+
+@media (max-width: 900px) {
+  html,
+  body,
+  #app {
+    overflow: auto;
+  }
+}
+
+/* Force final visual tokens above Skeleton base defaults. */
+html body {
+  background:
+    radial-gradient(1300px 840px at 10% -10%, rgba(118, 134, 162, 0.2), transparent 60%),
+    radial-gradient(1200px 820px at 90% -10%, rgba(130, 141, 158, 0.16), transparent 58%),
+    linear-gradient(180deg, #232934 0%, #1a2029 52%, #0f1218 100%) !important;
+  color: var(--text) !important;
+}
+
+button,
+.btn,
+input,
+select,
+textarea {
+  color: var(--text) !important;
+}
+
+button,
+.btn {
+  background: linear-gradient(
+    180deg,
+    rgba(73, 84, 102, 0.76) 0%,
+    rgba(50, 58, 72, 0.86) 100%
+  ) !important;
+  border-color: rgba(152, 167, 188, 0.36) !important;
+}

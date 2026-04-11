@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GreyOK_'s Twitch Co-Host Bot",
+  "version": "0.1.0",
+  "identifier": "com.streamtools.twitchcohostbot",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "GreyOK_'s Twitch Co-Host Bot",
+        "width": 1400,
+        "height": 920,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "dmg", "nsis"],
+    "category": "Utility",
+    "shortDescription": "Cloud-first Twitch AI cohost bot",
+    "resources": [
+      "assets/piper-linux/**/*",
+      "assets/piper-macos/**/*",
+      "assets/piper-win/**/*",
+      "assets/whisper/**/*",
+      "assets/whisper-linux/**/*",
+      "assets/whisper-macos/**/*",
+      "assets/whisper-win/**/*",
+      "../config.example.json",
+      "../whisper.default.json",
+      "../personality.example.json"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.png"
+    ],
+    "createUpdaterArtifacts": false,
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "nsis": {
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

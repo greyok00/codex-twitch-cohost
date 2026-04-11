@@ -1,0 +1,80 @@
+{
+  "twitch": {
+    "client_id": "your_twitch_client_id",
+    "client_secret": null,
+    "bot_username": "your_bot_username",
+    "channel": "your_channel_name",
+    "bot_token": null,
+    "redirect_url": "http://127.0.0.1:37219/callback",
+    "scopes": [
+      "chat:read",
+      "chat:edit",
+      "moderator:read:followers",
+      "channel:read:subscriptions",
+      "channel:manage:redemptions"
+    ],
+    "broadcaster_login": "your_channel_name",
+    "use_eventsub": true
+  },
+  "providers": {
+    "primary": {
+      "name": "local-ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "model": "llama3.1:8b-instruct",
+      "api_key": null,
+      "timeout_ms": 6000,
+      "enabled": true
+    },
+    "fallbacks": [
+      {
+        "name": "ollama-cloud",
+        "base_url": "https://ollama.com",
+        "model": "llama3.1:8b-instruct",
+        "api_key": "optional_cloud_fallback_key",
+        "timeout_ms": 10000,
+        "enabled": false
+      }
+    ]
+  },
+  "personality_path": "./personality.json",
+  "voice": {
+    "enabled": false,
+    "voice_name": "en_US-lessac-medium",
+    "piper_binary_path": null,
+    "piper_model_path": null,
+    "piper_config_path": null,
+    "speech_rate": 175,
+    "allow_mic_commands": false,
+    "stt_enabled": false,
+    "stt_binary_path": "whisper-cli",
+    "stt_model_path": "/absolute/path/to/ggml-base.en.bin"
+  },
+  "memory": {
+    "persist": true,
+    "max_recent_messages": 40,
+    "store_viewer_facts": true
+  },
+  "moderation": {
+    "blocked_phrases": [
+      "slur-example"
+    ],
+    "minimum_reply_interval_ms": 3500,
+    "max_reply_chars": 400
+  },
+  "search": {
+    "provider": "duckduckgo",
+    "api_key": null,
+    "max_results": 3,
+    "enabled": false
+  },
+  "browser": {
+    "allow_open_url": true,
+    "require_explicit_open_command": true
+  },
+  "behavior": {
+    "proactive_event_replies": true,
+    "cohost_mode": true,
+    "auto_greet": true,
+    "scheduled_messages_minutes": 15
+  }
+}

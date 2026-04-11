@@ -1,0 +1,11 @@
+node_modules
+.DS_Store
+dist
+.vite
+*.log
+.env
+src-tauri/target
+src-tauri/.cargo
+*.db
+config.json
+personality.json

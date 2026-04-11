@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cohost Avatar</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --mouth-x: 50%;
+      --mouth-y: 74%;
+      --mouth-w: 24%;
+      --mouth-h: 10%;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      user-select: none;
+    }
+
+    .stage {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+
+    .avatar-wrap {
+      position: relative;
+      width: fit-content;
+      height: fit-content;
+      max-width: 96vw;
+      max-height: 96vh;
+      display: grid;
+      place-items: center;
+      transform-origin: center bottom;
+      transition: transform 80ms linear;
+      padding: 10px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(205, 214, 232, 0.28), rgba(74, 83, 99, 0.25));
+      box-shadow:
+        0 0 0 2px rgba(225, 232, 246, 0.25) inset,
+        0 16px 34px rgba(0, 0, 0, 0.35);
+    }
+
+    .avatar-wrap.speaking {
+      animation: bob 360ms ease-in-out infinite;
+    }
+
+    @keyframes bob {
+      0% { transform: translateY(0px) rotate(0deg); }
+      50% { transform: translateY(-1.5px) rotate(-0.15deg); }
+      100% { transform: translateY(0px) rotate(0deg); }
+    }
+
+    img {
+      width: auto;
+      height: auto;
+      max-width: 96vw;
+      max-height: 96vh;
+      object-fit: none;
+      filter: drop-shadow(0 10px 30px rgba(0,0,0,0.35));
+      -webkit-user-drag: none;
+      pointer-events: none;
+    }
+
+    .mouth {
+      position: absolute;
+      left: var(--mouth-x);
+      top: var(--mouth-y);
+      width: var(--mouth-w);
+      height: var(--mouth-h);
+      transform: translate(-50%, -50%);
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: rgba(25, 9, 9, 0.65);
+      box-shadow:
+        inset 0 -8px 10px rgba(0, 0, 0, 0.35),
+        0 1px 1px rgba(255,255,255,0.09);
+      opacity: 0;
+      transition: opacity 70ms linear;
+      overflow: hidden;
+    }
+
+    .avatar-wrap.speaking .mouth {
+      opacity: 0.9;
+    }
+
+    .lip-top,
+    .lip-bot {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      background: linear-gradient(180deg, rgba(202,78,78,0.94), rgba(132,44,44,0.9));
+      transition: transform 60ms linear;
+      border-radius: 999px;
+    }
+
+    .lip-top {
+      top: 0;
+      height: 45%;
+      transform-origin: top center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    }
+
+    .lip-bot {
+      bottom: 0;
+      height: 45%;
+      transform-origin: bottom center;
+    }
+
+    .teeth {
+      position: absolute;
+      top: 34%;
+      left: 14%;
+      width: 72%;
+      height: 18%;
+      background: rgba(248, 238, 230, 0.9);
+      border-radius: 3px;
+      opacity: 0;
+      transition: opacity 55ms linear;
+    }
+
+    .tongue {
+      position: absolute;
+      bottom: -8%;
+      left: 26%;
+      width: 48%;
+      height: 32%;
+      border-radius: 999px;
+      background: rgba(197, 75, 84, 0.95);
+      opacity: 0;
+      transition: opacity 55ms linear;
+    }
+
+    .mouth.viseme-rest {
+      transform: translate(-50%, -50%) scaleY(0.3);
+    }
+
+    .mouth.viseme-a {
+      transform: translate(-50%, -50%) scaleY(1.2);
+    }
+
+    .mouth.viseme-a .teeth { opacity: 1; }
+
+    .mouth.viseme-e {
+      transform: translate(-50%, -50%) scaleY(0.8) scaleX(1.12);
+    }
+
+    .mouth.viseme-e .teeth { opacity: 0.95; }
+
+    .mouth.viseme-o {
+      transform: translate(-50%, -50%) scaleY(1.05) scaleX(0.78);
+      border-radius: 46% / 57%;
+    }
+
+    .mouth.viseme-m {
+      transform: translate(-50%, -50%) scaleY(0.2) scaleX(1.02);
+    }
+
+    .mouth.viseme-f {
+      transform: translate(-50%, -50%) scaleY(0.42) scaleX(1.08);
+    }
+
+    .mouth.viseme-f .teeth { opacity: 0.85; }
+
+    .mouth.viseme-a .tongue,
+    .mouth.viseme-o .tongue {
+      opacity: 0.66;
+    }
+
+    .mouth.viseme-m .lip-top {
+      transform: translateY(12%);
+    }
+
+    .mouth.viseme-m .lip-bot {
+      transform: translateY(-12%);
+    }
+
+    .hint {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      font-size: 11px;
+      color: rgba(255, 245, 232, 0.86);
+      background: rgba(40, 24, 14, 0.72);
+      border: 1px solid rgba(182, 132, 94, 0.55);
+      padding: 5px 7px;
+      border-radius: 4px;
+      backdrop-filter: blur(4px);
+      white-space: nowrap;
+    }
+
+    .align-panel {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 240px;
+      font-size: 11px;
+      color: rgba(240, 246, 255, 0.95);
+      background: rgba(18, 28, 43, 0.74);
+      border: 1px solid rgba(130, 166, 210, 0.48);
+      border-radius: 8px;
+      padding: 8px;
+      backdrop-filter: blur(8px);
+      display: grid;
+      gap: 6px;
+    }
+
+    .align-panel .row {
+      display: grid;
+      grid-template-columns: 16px 1fr auto;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .align-panel input[type='range'] {
+      width: 100%;
+    }
+
+    .align-panel button {
+      background: rgba(112, 149, 196, 0.35);
+      border: 1px solid rgba(171, 201, 238, 0.5);
+      color: #edf5ff;
+      border-radius: 6px;
+      padding: 4px 7px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .align-note {
+      opacity: 0.88;
+    }
+
+    .mouth.aligning {
+      outline: 2px dashed rgba(177, 218, 255, 0.9);
+      outline-offset: 2px;
+      cursor: move;
+      opacity: 0.38;
+      background: rgba(26, 14, 14, 0.45);
+    }
+
+    .avatar-wrap.speaking .mouth.aligning {
+      opacity: 0.9;
+    }
+
+    body.ui-hidden .hint,
+    body.ui-hidden .align-panel {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="hint">Avatar Popup • real-time viseme animation</div>
+    <div class="align-panel">
+      <strong>Mouth Align</strong>
+      <div class="row"><span>X</span><input id="mx" type="range" min="10" max="90" step="0.1" /><span id="mxv">50.0%</span></div>
+      <div class="row"><span>Y</span><input id="my" type="range" min="10" max="95" step="0.1" /><span id="myv">74.0%</span></div>
+      <div class="row"><span>W</span><input id="mw" type="range" min="6" max="60" step="0.1" /><span id="mwv">24.0%</span></div>
+      <div class="row"><span>H</span><input id="mh" type="range" min="4" max="30" step="0.1" /><span id="mhv">10.0%</span></div>
+      <div style="display:flex; gap:6px;">
+        <button id="resetAlign" type="button">Reset</button>
+        <button id="toggleUi" type="button">Hide UI</button>
+      </div>
+      <div class="align-note">Drag the outlined mouth directly on the image.</div>
+    </div>
+    <div class="avatar-wrap" id="wrap">
+      <img id="avatar" alt="Avatar" />
+      <div class="mouth viseme-rest" id="mouth">
+        <div class="lip-top"></div>
+        <div class="lip-bot"></div>
+        <div class="teeth"></div>
+        <div class="tongue"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const wrap = document.getElementById('wrap');
+    const mouth = document.getElementById('mouth');
+    const avatar = document.getElementById('avatar');
+    const root = document.documentElement;
+    const alignStorageKey = 'cohost_mouth_align_v1';
+    const mx = document.getElementById('mx');
+    const my = document.getElementById('my');
+    const mw = document.getElementById('mw');
+    const mh = document.getElementById('mh');
+    const mxv = document.getElementById('mxv');
+    const myv = document.getElementById('myv');
+    const mwv = document.getElementById('mwv');
+    const mhv = document.getElementById('mhv');
+    const resetAlign = document.getElementById('resetAlign');
+    const toggleUi = document.getElementById('toggleUi');
+    let avatarChannel = null;
+
+    const defaultAlign = { x: 50, y: 74, w: 24, h: 10 };
+
+    function clamp(v, lo, hi) {
+      return Math.max(lo, Math.min(hi, v));
+    }
+
+    function getAlign() {
+      try {
+        const raw = localStorage.getItem(alignStorageKey);
+        if (!raw) return { ...defaultAlign };
+        const parsed = JSON.parse(raw);
+        return {
+          x: clamp(Number(parsed.x ?? defaultAlign.x), 10, 90),
+          y: clamp(Number(parsed.y ?? defaultAlign.y), 10, 95),
+          w: clamp(Number(parsed.w ?? defaultAlign.w), 6, 60),
+          h: clamp(Number(parsed.h ?? defaultAlign.h), 4, 30)
+        };
+      } catch {
+        return { ...defaultAlign };
+      }
+    }
+
+    function applyAlign(align) {
+      root.style.setProperty('--mouth-x', `${align.x}%`);
+      root.style.setProperty('--mouth-y', `${align.y}%`);
+      root.style.setProperty('--mouth-w', `${align.w}%`);
+      root.style.setProperty('--mouth-h', `${align.h}%`);
+      mx.value = String(align.x);
+      my.value = String(align.y);
+      mw.value = String(align.w);
+      mh.value = String(align.h);
+      mxv.textContent = `${align.x.toFixed(1)}%`;
+      myv.textContent = `${align.y.toFixed(1)}%`;
+      mwv.textContent = `${align.w.toFixed(1)}%`;
+      mhv.textContent = `${align.h.toFixed(1)}%`;
+    }
+
+    function saveAlign(align) {
+      localStorage.setItem(alignStorageKey, JSON.stringify(align));
+      try {
+        if (avatarChannel) {
+          avatarChannel.postMessage({ type: 'mouth_align', align });
+        }
+      } catch {}
+    }
+
+    function updateAlign(patch) {
+      const next = { ...getAlign(), ...patch };
+      applyAlign(next);
+      saveAlign(next);
+    }
+
+    function loadImage() {
+      const src = localStorage.getItem('cohost_avatar_image');
+      if (src) avatar.src = src;
+    }
+
+    const VISEMES = ['rest', 'a', 'e', 'o', 'm', 'f'];
+    let speakingUntil = 0;
+    let sequence = [];
+    let seqIndex = 0;
+    let nextStepAt = 0;
+
+    function setViseme(v) {
+      for (const key of VISEMES) {
+        mouth.classList.remove(`viseme-${key}`);
+      }
+      mouth.classList.add(`viseme-${v}`);
+    }
+
+    function mapCharToViseme(ch) {
+      const c = ch.toLowerCase();
+      if ('aei'.includes(c)) return 'e';
+      if ('ou'.includes(c)) return 'o';
+      if ('mbp'.includes(c)) return 'm';
+      if ('fv'.includes(c)) return 'f';
+      if ('rnltdkgszhcjxyqw'.includes(c)) return 'a';
+      return 'rest';
+    }
+
+    function buildSequenceFromText(text) {
+      const chars = (text || '').replace(/\s+/g, ' ').slice(0, 180);
+      const seq = [];
+      for (const ch of chars) {
+        const v = mapCharToViseme(ch);
+        const dur = ch === ' ' ? 55 : (55 + Math.floor(Math.random() * 50));
+        seq.push({ v, dur });
+      }
+      if (seq.length === 0) {
+        const fallback = ['a', 'e', 'o', 'm', 'a', 'f'];
+        for (let i = 0; i < fallback.length; i += 1) {
+          seq.push({ v: fallback[i], dur: 90 });
+        }
+      }
+      return seq;
+    }
+
+    function startSpeaking(text) {
+      sequence = buildSequenceFromText(text);
+      seqIndex = 0;
+      nextStepAt = 0;
+      const est = sequence.reduce((sum, s) => sum + s.dur, 0);
+      speakingUntil = Date.now() + Math.max(900, Math.min(6000, est + 140));
+      wrap.classList.add('speaking');
+    }
+
+    function stopSpeaking() {
+      speakingUntil = 0;
+      sequence = [];
+      seqIndex = 0;
+      nextStepAt = 0;
+      wrap.classList.remove('speaking');
+      setViseme('rest');
+    }
+
+    function tick(now) {
+      if (now < speakingUntil) {
+        if (now >= nextStepAt) {
+          const step = sequence[seqIndex] || { v: 'rest', dur: 80 };
+          setViseme(step.v);
+          nextStepAt = now + step.dur;
+          seqIndex = (seqIndex + 1) % Math.max(1, sequence.length);
+        }
+        wrap.classList.add('speaking');
+      } else {
+        wrap.classList.remove('speaking');
+        setViseme('rest');
+      }
+      requestAnimationFrame(tick);
+    }
+
+    loadImage();
+    applyAlign(getAlign());
+
+    mx.addEventListener('input', () => updateAlign({ x: Number(mx.value) }));
+    my.addEventListener('input', () => updateAlign({ y: Number(my.value) }));
+    mw.addEventListener('input', () => updateAlign({ w: Number(mw.value) }));
+    mh.addEventListener('input', () => updateAlign({ h: Number(mh.value) }));
+    resetAlign.addEventListener('click', () => {
+      applyAlign(defaultAlign);
+      saveAlign(defaultAlign);
+    });
+
+    function applyUiHidden(hidden) {
+      document.body.classList.toggle('ui-hidden', hidden);
+      if (toggleUi) toggleUi.textContent = hidden ? 'Show UI' : 'Hide UI';
+      localStorage.setItem('cohost_avatar_ui_hidden_v1', hidden ? '1' : '0');
+    }
+    applyUiHidden(localStorage.getItem('cohost_avatar_ui_hidden_v1') === '1');
+    if (toggleUi) {
+      toggleUi.addEventListener('click', () => {
+        applyUiHidden(!document.body.classList.contains('ui-hidden'));
+      });
+    }
+    window.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'h') {
+        applyUiHidden(!document.body.classList.contains('ui-hidden'));
+      }
+    });
+
+    let dragActive = false;
+    function moveMouthToClient(clientX, clientY) {
+      const r = wrap.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      const xPct = clamp(((clientX - r.left) / r.width) * 100, 10, 90);
+      const yPct = clamp(((clientY - r.top) / r.height) * 100, 10, 95);
+      updateAlign({ x: xPct, y: yPct });
+    }
+
+    mouth.classList.add('aligning');
+    mouth.addEventListener('pointerdown', (e) => {
+      dragActive = true;
+      mouth.setPointerCapture(e.pointerId);
+      moveMouthToClient(e.clientX, e.clientY);
+    });
+    mouth.addEventListener('pointermove', (e) => {
+      if (!dragActive) return;
+      moveMouthToClient(e.clientX, e.clientY);
+    });
+    mouth.addEventListener('pointerup', (e) => {
+      dragActive = false;
+      try { mouth.releasePointerCapture(e.pointerId); } catch {}
+    });
+    mouth.addEventListener('pointercancel', () => {
+      dragActive = false;
+    });
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'cohost_avatar_image') loadImage();
+      if (e.key === alignStorageKey) applyAlign(getAlign());
+    });
+
+    if ('BroadcastChannel' in window) {
+      avatarChannel = new BroadcastChannel('cohost-avatar-events');
+      avatarChannel.onmessage = (event) => {
+        const msg = event.data || {};
+        if (msg.type === 'speak' || msg.type === 'speak_start') {
+          startSpeaking(typeof msg.text === 'string' ? msg.text : '');
+        }
+        if (msg.type === 'speak_stop') {
+          stopSpeaking();
+        }
+        if (msg.type === 'set_mouth_align' && msg.align) {
+          updateAlign(msg.align);
+        }
+      };
+    }
+
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
