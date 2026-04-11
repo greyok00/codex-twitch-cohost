@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { LogicalSize } from '@tauri-apps/api/dpi';
-  import { getSttConfig, setVoiceEnabled, submitStreamerPrompt, transcribeMicChunk } from '../api/tauri';
+  import { autoConfigureSttFast, getSttConfig, setVoiceEnabled, submitStreamerPrompt, transcribeMicChunk } from '../api/tauri';
   import { authSessionsStore, botLogStore, chatStore, diagnosticsStore, errorBannerStore, eventStore, statusStore } from '../stores/app';
 
   let content = '';
@@ -15,6 +15,8 @@
   let micChunkMs = 2200;
   let lastMicTextNormalized = '';
   let lastMicTextAt = 0;
+  let sttStatusNote = 'STT not initialized.';
+  let sttFixing = false;
 
   $: combined = [
     ...$chatStore.map((m) => ({ ...m, source: 'viewer' as const })),
@@ -48,9 +50,30 @@
     try {
       const cfg = await getSttConfig();
       sttReady = !!(cfg.sttBinaryPath && cfg.sttModelPath && cfg.sttEnabled);
+      sttStatusNote = sttReady
+        ? 'STT ready.'
+        : `STT not ready (${cfg.sttEnabled ? 'missing binary/model' : 'disabled'}).`;
     } catch {
       sttReady = false;
+      sttStatusNote = 'STT status unavailable.';
     }
+  }
+
+  async function ensureSttReady(): Promise<boolean> {
+    await refreshSttReady();
+    if (sttReady) return true;
+    if (sttFixing) return false;
+    sttFixing = true;
+    try {
+      const result = await autoConfigureSttFast();
+      sttStatusNote = result.message || sttStatusNote;
+    } catch (error) {
+      sttStatusNote = `STT auto-fix failed: ${String(error)}`;
+    } finally {
+      sttFixing = false;
+    }
+    await refreshSttReady();
+    return sttReady;
   }
 
   async function submit() {
@@ -78,8 +101,8 @@
       errorBannerStore.set(activationBlockedReason);
       return;
     }
-    if (!sttReady) {
-      errorBannerStore.set('STT is not ready. Check Settings -> Voice to confirm STT status.');
+    if (!(await ensureSttReady())) {
+      errorBannerStore.set(`STT is not ready. ${sttStatusNote} Go to Settings -> Voice if needed.`);
       return;
     }
 
@@ -97,10 +120,12 @@
     const thisLoop = ++micLoopId;
     micStatus = 'Mic live.';
 
+    let consecutiveErrors = 0;
     while (micLive && thisLoop === micLoopId) {
       micProcessing = true;
       try {
         const text = (await transcribeMicChunk(micChunkMs)).trim();
+        consecutiveErrors = 0;
         if (text) {
           const normalized = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
           const now = Date.now();
@@ -115,11 +140,15 @@
       } catch (error) {
         const msg = String(error);
         if (!msg.includes('busy')) {
-          errorBannerStore.set('Mic transcription failed: ' + msg);
-          (window as unknown as { __cohost_mic_live?: boolean }).__cohost_mic_live = false;
-          micLive = false;
-          micStatus = 'Mic stopped due to error.';
-          break;
+          consecutiveErrors += 1;
+          micStatus = `Mic retrying (${consecutiveErrors}/3): ${msg}`;
+          if (consecutiveErrors >= 3) {
+            errorBannerStore.set('Mic transcription failed: ' + msg);
+            (window as unknown as { __cohost_mic_live?: boolean }).__cohost_mic_live = false;
+            micLive = false;
+            micStatus = 'Mic stopped due to repeated STT errors.';
+            break;
+          }
         }
       } finally {
         micProcessing = false;
@@ -141,6 +170,11 @@
     try {
       const existing = await WebviewWindow.getByLabel('cohost-avatar');
       if (existing) {
+        const visible = await existing.isVisible();
+        if (visible) {
+          await existing.hide();
+          return;
+        }
         try {
           const raw = localStorage.getItem('cohost_avatar_size');
           if (raw) {
@@ -192,23 +226,25 @@
     <h3>💬 Main Session Chat Control</h3>
     <div class="quick-icons">
       <button
-        class="btn avatar-icon"
+        class="btn avatar-icon {activationBlocked ? 'inactive' : ''}"
         on:click={openAvatarQuick}
         disabled={activationBlocked}
-        title="Open avatar popup"
-        aria-label="Open avatar popup"
+        title="Toggle avatar popup"
+        aria-label="Toggle avatar popup"
       >
-        🧍
+        <span class="glyph">🧍</span>
+        <span class="label">Avatar</span>
       </button>
       <button
         class="btn mic-icon {micLive ? 'live' : 'off'}"
         on:click={toggleMicInline}
-        disabled={activationBlocked || !sttReady}
+        disabled={activationBlocked}
         aria-busy={micProcessing}
         title={micLive ? 'Stop mic' : 'Start mic'}
         aria-label={micLive ? 'Stop mic' : 'Start mic'}
       >
-        🎤
+        <span class="glyph">🎤</span>
+        <span class="label">{micLive ? 'Live' : 'Mic'}</span>
       </button>
     </div>
   </div>
@@ -230,7 +266,7 @@
     <button class="btn" on:click={submit}>🧠 Send to AI</button>
   </div>
 
-  <small class="muted">{micStatus}</small>
+  <small class="muted">{micStatus} {sttFixing ? 'Auto-fixing STT…' : ''}</small>
 
   <div class="feed">
     {#if combined.length === 0}
@@ -259,7 +295,7 @@
   .quick-icons {
     display: inline-flex;
     align-items: center;
-    gap: 0.42rem;
+    gap: 0.5rem;
   }
   .actions {
     display: flex;
@@ -283,48 +319,71 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
   .mic-icon {
-    width: 58px;
-    height: 58px;
-    min-width: 58px;
-    min-height: 58px;
-    padding: 0;
-    display: inline-grid;
-    place-items: center;
-    font-size: 2rem;
-    line-height: 1;
+    width: 78px;
+    height: 78px;
+    min-width: 78px;
+    min-height: 78px;
+    padding: 0.25rem 0.2rem;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
     border-width: 2px;
+    gap: 0.2rem;
   }
   .mic-icon.live {
-    border-color: color-mix(in srgb, var(--ok) 75%, var(--border) 25%) !important;
+    border-color: color-mix(in srgb, var(--ok) 82%, var(--border) 18%) !important;
     background: linear-gradient(
       180deg,
-      color-mix(in srgb, var(--ok) 30%, rgba(73, 84, 102, 0.76) 70%) 0%,
-      color-mix(in srgb, var(--ok) 18%, rgba(50, 58, 72, 0.86) 82%) 100%
+      color-mix(in srgb, var(--ok) 42%, rgba(62, 75, 91, 0.82) 58%) 0%,
+      color-mix(in srgb, var(--ok) 23%, rgba(36, 45, 58, 0.88) 77%) 100%
     ) !important;
     box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--ok) 42%, transparent 58%),
-      0 0 28px color-mix(in srgb, var(--ok) 45%, transparent 55%);
+      0 0 0 2px color-mix(in srgb, var(--ok) 50%, transparent 50%),
+      0 0 34px color-mix(in srgb, var(--ok) 55%, transparent 45%);
   }
   .mic-icon.off {
     opacity: 1;
     background: linear-gradient(
       180deg,
-      rgba(120, 129, 145, 0.88) 0%,
-      rgba(87, 95, 110, 0.9) 100%
+      rgba(120, 129, 145, 0.9) 0%,
+      rgba(80, 89, 105, 0.92) 100%
     ) !important;
     border-color: rgba(206, 214, 230, 0.5) !important;
   }
   .avatar-icon {
-    width: 58px;
-    height: 58px;
-    min-width: 58px;
-    min-height: 58px;
-    padding: 0;
-    display: inline-grid;
-    place-items: center;
-    font-size: 1.9rem;
-    line-height: 1;
+    width: 78px;
+    height: 78px;
+    min-width: 78px;
+    min-height: 78px;
+    padding: 0.25rem 0.2rem;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
     border-width: 2px;
+    gap: 0.2rem;
+    background: linear-gradient(
+      180deg,
+      rgba(116, 140, 173, 0.9) 0%,
+      rgba(81, 102, 133, 0.92) 100%
+    ) !important;
+    border-color: rgba(202, 220, 242, 0.55) !important;
+  }
+  .avatar-icon.inactive {
+    opacity: 0.55;
+  }
+  .quick-icons .glyph {
+    font-size: 1.95rem;
+    line-height: 1;
+  }
+  .quick-icons .label {
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
   }
   .health {
     display: flex;

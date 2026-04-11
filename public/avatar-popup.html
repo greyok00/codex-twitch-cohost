@@ -214,6 +214,21 @@
       gap: 6px;
     }
 
+    .ui-toggle-fab {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      z-index: 50;
+      border: 1px solid rgba(176, 204, 239, 0.55);
+      background: rgba(22, 34, 50, 0.78);
+      color: #eef6ff;
+      border-radius: 999px;
+      padding: 7px 11px;
+      font-size: 12px;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+    }
+
     .align-panel .row {
       display: grid;
       grid-template-columns: 16px 1fr auto;
@@ -282,6 +297,7 @@
       </div>
     </div>
   </div>
+  <button id="uiFab" class="ui-toggle-fab" type="button">Hide UI</button>
 
   <script>
     const wrap = document.getElementById('wrap');
@@ -299,6 +315,7 @@
     const mhv = document.getElementById('mhv');
     const resetAlign = document.getElementById('resetAlign');
     const toggleUi = document.getElementById('toggleUi');
+    const uiFab = document.getElementById('uiFab');
     let avatarChannel = null;
 
     const defaultAlign = { x: 50, y: 74, w: 24, h: 10 };
@@ -447,11 +464,17 @@
     function applyUiHidden(hidden) {
       document.body.classList.toggle('ui-hidden', hidden);
       if (toggleUi) toggleUi.textContent = hidden ? 'Show UI' : 'Hide UI';
+      if (uiFab) uiFab.textContent = hidden ? 'Show Controls' : 'Hide Controls';
       localStorage.setItem('cohost_avatar_ui_hidden_v1', hidden ? '1' : '0');
     }
     applyUiHidden(localStorage.getItem('cohost_avatar_ui_hidden_v1') === '1');
     if (toggleUi) {
       toggleUi.addEventListener('click', () => {
+        applyUiHidden(!document.body.classList.contains('ui-hidden'));
+      });
+    }
+    if (uiFab) {
+      uiFab.addEventListener('click', () => {
         applyUiHidden(!document.body.classList.contains('ui-hidden'));
       });
     }
