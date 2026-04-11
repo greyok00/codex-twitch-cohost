@@ -106,8 +106,8 @@
         errorBannerStore.set('OAuth setup required first: log in at Twitch Developer Console, create an app, copy Client ID, save it here, then connect bot.');
         return;
       }
-      await openIsolatedTwitchWindow(botAuthProfile, 'https://www.twitch.tv/login');
-      await connectTwitch(true, botAuthProfile, 'bot');
+      // Reuse saved session by default; backend only opens auth flow when needed.
+      await connectTwitch(false, botAuthProfile, 'bot');
       setTimeout(() => {
         void loadSavedOAuthSettings();
         void loadAuthSessions();
@@ -138,13 +138,12 @@
         errorBannerStore.set('OAuth setup required first: create app in Twitch Developer Console, save Client ID, then connect streamer.');
         return;
       }
-      await openIsolatedTwitchWindow(streamerAuthProfile, 'https://www.twitch.tv/login');
       if (!$authSessionsStore.botTokenPresent) {
         errorBannerStore.set('Connect Bot first, then connect Streamer.');
         return;
       }
-      // Always force streamer OAuth so switching streamers reliably opens login.
-      await connectTwitch(true, streamerAuthProfile, 'streamer');
+      // Reuse saved streamer session by default.
+      await connectTwitch(false, streamerAuthProfile, 'streamer');
       setTimeout(() => {
         void loadSavedOAuthSettings();
         void loadAuthSessions();
