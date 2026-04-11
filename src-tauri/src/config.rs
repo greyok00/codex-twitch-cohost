@@ -1,4 +1,9 @@
-use std::{fs, path::PathBuf};
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -181,29 +186,98 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    fn preferred_config_path() -> PathBuf {
-        let root = PathBuf::from("../config.json");
-        if root.exists() {
-            return root;
+    fn local_config_candidates() -> Vec<PathBuf> {
+        vec![PathBuf::from("../config.json"), PathBuf::from("./config.json")]
+    }
+
+    fn user_config_path() -> PathBuf {
+        if let Some(explicit) = env::var_os("TWITCH_COHOST_CONFIG_DIR") {
+            return PathBuf::from(explicit).join("config.json");
+        }
+        if let Some(xdg) = env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(xdg).join("twitch-cohost-bot").join("config.json");
+        }
+        if let Some(home) = env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join(".config")
+                .join("twitch-cohost-bot")
+                .join("config.json");
         }
         PathBuf::from("./config.json")
     }
 
+    fn ensure_parent_dir(path: &Path) -> AppResult<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AppError::Config(format!("failed creating config dir {}: {e}", parent.display()))
+            })?;
+        }
+        Ok(())
+    }
+
+    fn is_writable_target(path: &Path) -> bool {
+        if path.exists() {
+            return OpenOptions::new().write(true).append(true).open(path).is_ok();
+        }
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        if fs::create_dir_all(parent).is_err() {
+            return false;
+        }
+        let probe = parent.join(format!(".write_probe_{}", std::process::id()));
+        match OpenOptions::new().create_new(true).write(true).open(&probe) {
+            Ok(mut f) => {
+                let _ = f.write_all(b"ok");
+                let _ = fs::remove_file(probe);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn read_candidates() -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        let user = Self::user_config_path();
+        if user.exists() {
+            candidates.push(user);
+        }
+        for local in Self::local_config_candidates() {
+            if local.exists() {
+                candidates.push(local);
+            }
+        }
+        if candidates.is_empty() {
+            candidates.push(Self::user_config_path());
+        }
+        candidates
+    }
+
+    fn write_target_path() -> PathBuf {
+        for local in Self::local_config_candidates() {
+            if Self::is_writable_target(&local) {
+                return local;
+            }
+        }
+        Self::user_config_path()
+    }
+
     pub fn load() -> AppResult<Self> {
-        let config_path = Self::preferred_config_path();
-        if !config_path.exists() {
-            return Err(AppError::Config(
-                "config.json not found. Copy config.example.json to config.json and set Twitch client_id/channel/bot_username.".to_string(),
-            ));
+        for config_path in Self::read_candidates() {
+            if !config_path.exists() {
+                continue;
+            }
+            let raw = fs::read_to_string(&config_path).map_err(|e| {
+                AppError::Config(format!("failed reading {}: {e}", config_path.display()))
+            })?;
+            let cfg: Self = serde_json::from_str(&raw).map_err(|e| {
+                AppError::Config(format!("invalid JSON in {}: {e}", config_path.display()))
+            })?;
+            cfg.validate()?;
+            return Ok(cfg);
         }
 
-        let raw = fs::read_to_string(&config_path)
-            .map_err(|e| AppError::Config(format!("failed reading {}: {e}", config_path.display())))?;
-        let cfg: Self = serde_json::from_str(&raw).map_err(|e| {
-            AppError::Config(format!("invalid JSON in {}: {e}", config_path.display()))
-        })?;
-        cfg.validate()?;
-        Ok(cfg)
+        Ok(Self::default())
     }
 
     pub fn save_to_disk(&self) -> AppResult<()> {
@@ -217,20 +291,13 @@ impl AppConfig {
         }
         safe.search.api_key = None;
         let rendered = serde_json::to_string_pretty(&safe)?;
-        let target = Self::preferred_config_path();
+        let target = Self::write_target_path();
+        Self::ensure_parent_dir(&target)?;
         fs::write(&target, rendered)
             .map_err(|e| AppError::Config(format!("failed writing {}: {e}", target.display())))
     }
 
     pub fn validate(&self) -> AppResult<()> {
-        if self.twitch.client_id.trim().is_empty()
-            || self.twitch.client_id == "your_twitch_client_id"
-            || self.twitch.client_id == "replace_client_id"
-        {
-            return Err(AppError::Config(
-                "twitch.client_id must be set in config.json".to_string(),
-            ));
-        }
         if self.providers.primary.base_url.trim().is_empty() {
             return Err(AppError::Config(
                 "providers.primary.base_url is required".to_string(),

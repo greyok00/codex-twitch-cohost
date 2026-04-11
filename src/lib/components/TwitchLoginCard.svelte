@@ -271,21 +271,21 @@
       {oauthConfigured ? 'OAuth configured' : 'OAuth not configured'}
     </span>
   </h3>
-  <p class="muted">Activation order: 1) connect bot, 2) connect streamer, 3) connect chat. Bot and streamer launch in separate Twitch browser sessions.</p>
+  <p class="muted">Simple flow: Save Twitch Client ID once, then connect Bot, connect Streamer, then connect Chat.</p>
 
   {#if !oauthConfigured}
     <div class="oauth-required">
-      <small class="muted">OAuth setup required once per user. Click below, log in to Twitch Developer Console, create an app, copy Client ID, and keep redirect URL as <code>http://127.0.0.1:37219/callback</code>.</small>
-      <button class="btn" on:click={openTwitchDevAppSetup}>1) Open Twitch App Setup (login required)</button>
+      <small class="muted">One-time setup: Create a Twitch app, copy its Client ID, then save it here. Use redirect URL <code>http://127.0.0.1:37219/callback</code>.</small>
+      <button class="btn" on:click={openTwitchDevAppSetup}>Open Twitch App Setup</button>
       <input bind:value={clientId} placeholder="Twitch client ID (required)" />
       <input bind:value={redirectUrl} placeholder="Redirect URL" />
-      <button class="btn" on:click={onSave}>2) Save OAuth Settings</button>
+      <button class="btn" on:click={onSave}>Save OAuth Settings</button>
     </div>
   {/if}
 
   {#if nextStep !== 'ready'}
     <div class="next-step">
-      <small class="muted">Next required step:
+      <small class="muted">Next step:
         {#if nextStep === 'connect-bot'} Connect Bot{/if}
         {#if nextStep === 'connect-streamer'} Connect Streamer{/if}
         {#if nextStep === 'connect-chat'} Connect Chat{/if}
@@ -300,12 +300,10 @@
 
   {#if oauthCode}
     <div class="oauth-code-card">
-      <small class="muted">
-        Authorization code for {oauthCode.role === 'streamer' ? 'Streamer' : 'Bot'} login
-      </small>
+      <small class="muted">Authorize {oauthCode.role === 'streamer' ? 'Streamer' : 'Bot'} account with this code:</small>
       <div class="oauth-code-value">{oauthCode.userCode}</div>
       <div class="actions">
-        <button class="btn" on:click={() => openExternal(oauthCode.verificationUrl)}>Open Twitch Activate Page</button>
+        <button class="btn" on:click={() => openExternal(oauthCode.verificationUrl)}>Open Twitch Activation Page</button>
         <button class="btn" on:click={() => navigator.clipboard?.writeText(oauthCode.userCode)}>Copy Code</button>
         <button class="btn" on:click={() => (oauthCode = null)}>Dismiss</button>
       </div>
@@ -321,9 +319,9 @@
     Streamer: {$authSessionsStore.streamerTokenPresent ? 'connected' : 'not connected'} ({$authSessionsStore.broadcasterLogin || 'not set'})
   </small>
   <div class="actions primary-actions">
-    <button class="btn" on:click={onLogin} disabled={!oauthConfigured}>Connect Bot</button>
-    <button class="btn" on:click={onConnectStreamer} disabled={!oauthConfigured || !$authSessionsStore.botTokenPresent}>Connect Streamer</button>
-    <button class="btn" on:click={joinNow} disabled={!oauthConfigured || !canJoin || $statusStore.twitchState === 'connected'}>Connect Chat</button>
+    <button class="btn" on:click={onLogin} disabled={!oauthConfigured}>1) Connect Bot</button>
+    <button class="btn" on:click={onConnectStreamer} disabled={!oauthConfigured || !$authSessionsStore.botTokenPresent}>2) Connect Streamer</button>
+    <button class="btn" on:click={joinNow} disabled={!oauthConfigured || !canJoin || $statusStore.twitchState === 'connected'}>3) Connect Chat</button>
     <button class="btn" on:click={leaveNow}>Disconnect Chat</button>
   </div>
 
@@ -333,7 +331,7 @@
 
   {#if showTools}
     <div class="actions">
-      <button class="btn" on:click={openBotLoginWindow}>🔐 Open Bot Login Window</button>
+      <button class="btn" on:click={openBotLoginWindow}>🔐 Open Twitch Login Page</button>
       <button class="btn" on:click={onSwitchBot}>🔄 Switch Bot Account</button>
       <button class="btn" on:click={onSwitchStreamer}>🔄 Switch Streamer Account</button>
       <button class="btn" on:click={onResetAuth}>🧼 Reset Auth Sessions</button>
