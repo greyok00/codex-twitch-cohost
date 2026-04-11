@@ -12,15 +12,29 @@ pub fn validate_and_open(config: &BrowserConfig, url: &str) -> AppResult<()> {
 
     let parsed = Url::parse(url).map_err(|e| AppError::Url(format!("invalid URL: {e}")))?;
     match parsed.scheme() {
-        "http" | "https" => {
-            open::that(parsed.as_str())
-                .map_err(|e| AppError::Url(format!("failed opening URL: {e}")))?;
-            Ok(())
-        }
+        "http" | "https" => open_url_with_fallback(parsed.as_str()),
         _ => Err(AppError::Url(
             "only http and https URLs are allowed".to_string(),
         )),
     }
+}
+
+pub fn open_url_with_fallback(url: &str) -> AppResult<()> {
+    #[cfg(target_os = "linux")]
+    {
+        for (bin, args) in [
+            ("xdg-open", vec![url.to_string()]),
+            ("gio", vec!["open".to_string(), url.to_string()]),
+            ("sensible-browser", vec![url.to_string()]),
+        ] {
+            let launched = Command::new(bin).args(args).spawn().is_ok();
+            if launched {
+                return Ok(());
+            }
+        }
+    }
+
+    open::that(url).map_err(|e| AppError::Url(format!("failed opening URL: {e}")))
 }
 
 fn sanitize_profile_name(raw: &str) -> String {
@@ -137,7 +151,11 @@ pub fn open_isolated_twitch_url(app: &AppHandle, profile_name: &str, url: &str) 
         }
     }
 
-    Err(AppError::Url(
-        "could not launch an isolated browser profile (install Chrome/Firefox/Edge)".to_string(),
-    ))
+    // Packaged builds (for example AppImage) may not see browser binaries on PATH.
+    // Fallback to system default browser so OAuth can still proceed.
+    open_url_with_fallback(url).map_err(|_| {
+        AppError::Url(
+            "could not launch an isolated browser profile or default browser".to_string(),
+        )
+    })
 }

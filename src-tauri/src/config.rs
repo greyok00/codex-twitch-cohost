@@ -207,7 +207,16 @@ impl AppConfig {
     }
 
     pub fn save_to_disk(&self) -> AppResult<()> {
-        let rendered = serde_json::to_string_pretty(self)?;
+        // Never persist secrets to config.json; keep them in keychain only.
+        let mut safe = self.clone();
+        safe.twitch.client_secret = None;
+        safe.twitch.bot_token = None;
+        safe.providers.primary.api_key = None;
+        for fallback in &mut safe.providers.fallbacks {
+            fallback.api_key = None;
+        }
+        safe.search.api_key = None;
+        let rendered = serde_json::to_string_pretty(&safe)?;
         let target = Self::preferred_config_path();
         fs::write(&target, rendered)
             .map_err(|e| AppError::Config(format!("failed writing {}: {e}", target.display())))

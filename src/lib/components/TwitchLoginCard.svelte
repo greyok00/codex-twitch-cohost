@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { listen } from '@tauri-apps/api/event';
-  import { clearAuthSessions, connectChat, connectTwitch, disconnectChat, getTwitchOauthSettings, loadAuthSessions, loadStatus, openIsolatedTwitchWindow, setTwitchOauthSettings } from '../api/tauri';
+  import { clearAuthSessions, connectChat, connectTwitch, disconnectChat, getTwitchOauthSettings, loadAuthSessions, loadStatus, openExternal, openIsolatedTwitchWindow, setTwitchOauthSettings } from '../api/tauri';
   import { authSessionsStore, errorBannerStore, statusStore } from '../stores/app';
 
   let clientId = '';
@@ -16,6 +16,7 @@
   let autoJoinInFlight = false;
   let autoJoinRetryScheduled = false;
   $: canJoin = $authSessionsStore.botTokenPresent && $authSessionsStore.streamerTokenPresent;
+  $: oauthConfigured = Boolean(clientId && clientId.trim() && clientId !== 'your_twitch_client_id' && clientId !== 'replace_client_id');
   $: nextStep = !$authSessionsStore.botTokenPresent
     ? 'connect-bot'
     : !$authSessionsStore.streamerTokenPresent
@@ -30,6 +31,7 @@
     botUsername = saved.botUsername || '';
     channel = saved.channel || '';
     redirectUrl = saved.redirectUrl || redirectUrl;
+    showAdvanced = !oauthConfigured;
   }
 
   onMount(() => {
@@ -75,9 +77,24 @@
     }
   }
 
+  async function openTwitchDevAppSetup() {
+    try {
+      await openExternal('https://dev.twitch.tv/console/apps/create');
+    } catch (error) {
+      errorBannerStore.set('Failed to open Twitch Developer Console: ' + String(error));
+    }
+  }
+
   async function onLogin() {
     try {
-      await connectTwitch(false, botAuthProfile, 'bot');
+      if (!oauthConfigured) {
+        showAdvanced = true;
+        await openTwitchDevAppSetup();
+        errorBannerStore.set('OAuth setup required first: log in at Twitch Developer Console, create an app, copy Client ID, save it here, then connect bot.');
+        return;
+      }
+      await openIsolatedTwitchWindow(botAuthProfile, 'https://www.twitch.tv/login');
+      await connectTwitch(true, botAuthProfile, 'bot');
       setTimeout(() => {
         void loadSavedOAuthSettings();
         void loadAuthSessions();
@@ -102,11 +119,19 @@
 
   async function onConnectStreamer() {
     try {
+      if (!oauthConfigured) {
+        showAdvanced = true;
+        await openTwitchDevAppSetup();
+        errorBannerStore.set('OAuth setup required first: create app in Twitch Developer Console, save Client ID, then connect streamer.');
+        return;
+      }
+      await openIsolatedTwitchWindow(streamerAuthProfile, 'https://www.twitch.tv/login');
       if (!$authSessionsStore.botTokenPresent) {
         errorBannerStore.set('Connect Bot first, then connect Streamer.');
         return;
       }
-      await connectTwitch(false, streamerAuthProfile, 'streamer');
+      // Always force streamer OAuth so switching streamers reliably opens login.
+      await connectTwitch(true, streamerAuthProfile, 'streamer');
       setTimeout(() => {
         void loadSavedOAuthSettings();
         void loadAuthSessions();
@@ -139,6 +164,11 @@
 
   async function joinNow() {
     try {
+      if (!oauthConfigured) {
+        showAdvanced = true;
+        errorBannerStore.set('Set Twitch client ID first in OAuth Setup.');
+        return;
+      }
       if (!canJoin) {
         errorBannerStore.set('Activation order: Connect Bot -> Connect Streamer -> Connect Chat.');
         return;
@@ -200,8 +230,24 @@
 </script>
 
 <section class="card">
-  <h3>🔐 Twitch Login</h3>
-  <p class="muted">Activation order is enforced: 1) connect bot, 2) connect streamer, 3) connect chat.</p>
+  <h3 class="title-row">
+    🔐 Twitch Login
+    <span class="oauth-status">
+      <span class="status-dot {oauthConfigured ? 'ok' : 'bad'}"></span>
+      {oauthConfigured ? 'OAuth configured' : 'OAuth not configured'}
+    </span>
+  </h3>
+  <p class="muted">Activation order: 1) connect bot, 2) connect streamer, 3) connect chat. Bot and streamer launch in separate Twitch browser sessions.</p>
+
+  {#if !oauthConfigured}
+    <div class="oauth-required">
+      <small class="muted">OAuth setup required once per user. Click below, log in to Twitch Developer Console, create an app, copy Client ID, and keep redirect URL as <code>http://127.0.0.1:37219/callback</code>.</small>
+      <button class="btn" on:click={openTwitchDevAppSetup}>1) Open Twitch App Setup (login required)</button>
+      <input bind:value={clientId} placeholder="Twitch client ID (required)" />
+      <input bind:value={redirectUrl} placeholder="Redirect URL" />
+      <button class="btn" on:click={onSave}>2) Save OAuth Settings</button>
+    </div>
+  {/if}
 
   {#if nextStep !== 'ready'}
     <div class="next-step">
@@ -227,9 +273,9 @@
     Streamer: {$authSessionsStore.streamerTokenPresent ? 'connected' : 'not connected'} ({$authSessionsStore.broadcasterLogin || 'not set'})
   </small>
   <div class="actions primary-actions">
-    <button class="btn" on:click={onLogin}>Connect Bot</button>
-    <button class="btn" on:click={onConnectStreamer} disabled={!$authSessionsStore.botTokenPresent}>Connect Streamer</button>
-    <button class="btn" on:click={joinNow} disabled={!canJoin || $statusStore.twitchState === 'connected'}>Connect Chat</button>
+    <button class="btn" on:click={onLogin} disabled={!oauthConfigured}>Connect Bot</button>
+    <button class="btn" on:click={onConnectStreamer} disabled={!oauthConfigured || !$authSessionsStore.botTokenPresent}>Connect Streamer</button>
+    <button class="btn" on:click={joinNow} disabled={!oauthConfigured || !canJoin || $statusStore.twitchState === 'connected'}>Connect Chat</button>
     <button class="btn" on:click={leaveNow}>Disconnect Chat</button>
   </div>
 
@@ -275,5 +321,42 @@
     align-items: center;
     gap: 0.55rem;
     flex-wrap: wrap;
+  }
+  .oauth-required {
+    display: grid;
+    gap: 0.45rem;
+    margin-bottom: 0.75rem;
+    padding: 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--panel), white 3%);
+  }
+  .title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+  }
+  .oauth-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .status-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    display: inline-block;
+  }
+  .status-dot.ok {
+    background: #22c55e;
+    box-shadow: 0 0 0.45rem rgba(34, 197, 94, 0.55);
+  }
+  .status-dot.bad {
+    background: #ef4444;
+    box-shadow: 0 0 0.45rem rgba(239, 68, 68, 0.5);
   }
 </style>

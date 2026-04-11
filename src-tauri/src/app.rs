@@ -35,16 +35,23 @@ pub fn bootstrap(app: AppHandle) -> Result<AppState, String> {
         let _ = config.save_to_disk();
     }
 
+    let mut migrated_sensitive_values = false;
     if let Some(token) = config.twitch.bot_token.take() {
         let _ = secrets.set_twitch_token(&config.twitch.channel, &token);
+        migrated_sensitive_values = true;
     }
     if let Some(key) = config.providers.primary.api_key.take() {
         let _ = secrets.set_provider_key(&config.providers.primary.name, &key);
+        migrated_sensitive_values = true;
     }
     for provider in &mut config.providers.fallbacks {
         if let Some(key) = provider.api_key.take() {
             let _ = secrets.set_provider_key(&provider.name, &key);
+            migrated_sensitive_values = true;
         }
+    }
+    if migrated_sensitive_values {
+        let _ = config.save_to_disk();
     }
 
     let profile = PersonalityEngine::load(&config.personality_path)

@@ -2,6 +2,13 @@
 
 Cloud-first, low-latency Twitch AI co-host desktop app built with **Tauri (Rust backend)** and **Svelte (frontend)**.
 
+## Download
+
+- **AppImage (Linux, available now):** `GreyOK_'s Twitch Co-Host Bot_0.1.0_amd64.AppImage`
+- **Build path:** `src-tauri/target/release/bundle/appimage/`
+- **Releases page:** https://github.com/greyok00/codex-twitch-cohost/releases
+- **Windows `.exe` and macOS `.dmg`:** published from GitHub Actions release builds (currently untested).
+
 ## Features
 
 - Browser-based Twitch login using Twitch Device Code flow
@@ -55,8 +62,8 @@ cp personality.example.json personality.json
 
 2. Edit `config.json`:
 
-- Set Twitch OAuth values (`client_id`, `client_secret`, bot username/channel)
-- Use the app to switch to cloud-only mode and save provider API key in keychain
+- Set Twitch OAuth `client_id` (and optionally `redirect_url`)
+- Do **not** hardcode provider keys in config; use in-app key storage (OS keychain)
 
 3. Install dependencies:
 
@@ -69,6 +76,16 @@ npm install
 ```bash
 npm run tauri dev
 ```
+
+## Quick Walkthrough
+
+1. Open app and go to **Twitch Login**.
+2. Click **Connect Bot** and finish OAuth in browser.
+3. Click **Connect Streamer** and finish OAuth in browser.
+4. Click **Connect Chat** (join is blocked until both Bot + Streamer are authenticated).
+5. In **Cloud AI Setup**, paste provider key once and pick model preset.
+6. Use **Main Session Chat Control** for local prompts and live bot responses.
+7. Optional: open **Avatar Popup** and align mouth placement.
 
 ## Twitch Login Flow
 
@@ -129,6 +146,13 @@ Configured targets:
 - macOS DMG
 - Windows NSIS installer
 
+### Run AppImage
+
+```bash
+chmod +x "src-tauri/target/release/bundle/appimage/GreyOK_'s Twitch Co-Host Bot_0.1.0_amd64.AppImage"
+"./src-tauri/target/release/bundle/appimage/GreyOK_'s Twitch Co-Host Bot_0.1.0_amd64.AppImage"
+```
+
 ## Integration Smoke Test
 
 Run a local integration smoke test (checks + bounded dev boot):
@@ -148,6 +172,7 @@ Workflow builds Linux/macOS/Windows matrix, uploads artifacts, and publishes on 
 - moderation phrase blocking before response generation
 - OAuth callback state validation
 - Twitch/provider credentials stored in local OS keychain
+- `config.json` writes are sanitized to avoid persisting secrets (tokens/client secrets/provider keys)
 
 ## Troubleshooting
 

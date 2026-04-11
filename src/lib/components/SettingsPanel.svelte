@@ -47,6 +47,6 @@
   <input bind:value={openUrl} placeholder="https://" />
   <button on:click={open}>Open URL (explicit)</button>
   <input bind:value={providerName} placeholder="Provider name (ex: ollama-cloud)" />
-  <input bind:value={providerKey} placeholder="Provider API key (stored locally)" />
+  <input type="password" autocomplete="off" bind:value={providerKey} placeholder="Provider API key (stored in keychain)" />
   <button on:click={saveProviderKey}>Save Provider Key</button>
 </section>

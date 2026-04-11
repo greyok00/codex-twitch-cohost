@@ -1,4 +1,5 @@
 node_modules
+.local
 .DS_Store
 dist
 .vite
@@ -7,5 +8,6 @@ dist
 src-tauri/target
 src-tauri/.cargo
 *.db
+codex-twitch-cohost-source-final.tar.gz
 config.json
 personality.json

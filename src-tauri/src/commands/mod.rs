@@ -13,7 +13,7 @@ use tokio::time::{timeout, Duration};
 
 use crate::{
     app,
-    browser::service::{open_isolated_twitch_url, validate_and_open},
+    browser::service::{open_isolated_twitch_url, open_url_with_fallback, validate_and_open},
     error::{AppError, AppResult},
     personality::engine::{PersonalityEngine, PersonalityProfile},
     state::{AppState, ChatMessage, ConnectionState, PipelineInput},
@@ -571,6 +571,36 @@ fn has_streamer_session(
     shared
         .secrets
         .get_twitch_token(&broadcaster_token_key(&broadcaster_login))
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+fn has_bot_session(
+    shared: &std::sync::Arc<crate::state::SharedState>,
+    cfg: &crate::config::AppConfig,
+) -> bool {
+    let channel = normalize_login(&cfg.twitch.channel);
+    let bot_username = normalize_login(&cfg.twitch.bot_username);
+    let channel_has_token = if channel.is_empty() {
+        false
+    } else {
+        shared
+            .secrets
+            .get_twitch_token(&channel)
+            .ok()
+            .flatten()
+            .is_some()
+    };
+    if channel_has_token {
+        return true;
+    }
+    if bot_username.is_empty() {
+        return false;
+    }
+    shared
+        .secrets
+        .get_twitch_token(&bot_username)
         .ok()
         .flatten()
         .is_some()
@@ -1406,7 +1436,7 @@ pub async fn start_twitch_oauth(
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }),
             );
-            if let Err(fallback_err) = open::that(&device_flow.verification_uri) {
+            if let Err(fallback_err) = open_url_with_fallback(&device_flow.verification_uri) {
                 let msg = format!("failed opening browser: {fallback_err}");
                 shared.diagnostics.write().last_error = Some(msg.clone());
                 let _ = app_handle.emit("error_banner", msg);
@@ -1515,7 +1545,7 @@ pub async fn start_twitch_oauth(
                 }));
                 if !is_streamer_role {
                     let latest = shared.config.read().clone();
-                    if latest.twitch.use_eventsub && !has_streamer_session(&shared, &latest) {
+                    if !has_streamer_session(&shared, &latest) {
                         let _ = app_handle.emit("timeline_event", serde_json::json!({
                             "id": uuid::Uuid::new_v4().to_string(),
                             "kind": "oauth",
@@ -1619,12 +1649,23 @@ async fn connect_twitch_chat_internal(
     app::try_provider_health_probe(shared.clone());
 
     let cfg = shared.config.read().clone();
-    if cfg.twitch.use_eventsub && !has_streamer_session(&shared, &cfg) {
+    if !has_bot_session(&shared, &cfg) {
         app::update_twitch_state(&shared, ConnectionState::Disconnected);
-        let msg = "Waiting for streamer login. Connect Streamer first so EventSub notifications (follows/subs/raids) can be enabled.".to_string();
+        let msg = "Bot login required. Connect Bot first.".to_string();
         let _ = app_handle.emit("timeline_event", serde_json::json!({
             "id": uuid::Uuid::new_v4().to_string(),
-            "kind": "eventsub_check",
+            "kind": "oauth",
+            "content": msg.clone(),
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        }));
+        return Err(msg);
+    }
+    if !has_streamer_session(&shared, &cfg) {
+        app::update_twitch_state(&shared, ConnectionState::Disconnected);
+        let msg = "Streamer login required. Connect Streamer before joining chat.".to_string();
+        let _ = app_handle.emit("timeline_event", serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "kind": "oauth",
             "content": msg.clone(),
             "timestamp": chrono::Utc::now().to_rfc3339()
         }));

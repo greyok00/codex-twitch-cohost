@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { configureCloudOnlyMode, getProviderApiKey, openExternal, setProviderApiKey } from '../api/tauri';
+  import { configureCloudOnlyMode, openExternal, setProviderApiKey } from '../api/tauri';
   import { errorBannerStore } from '../stores/app';
 
   let apiKey = '';
@@ -13,17 +12,6 @@
     { id: 'gpt-oss:120b-cloud', label: 'Open weights assistant', tags: 'agentic, tool-ready', webSearch: 'Yes (via app tools)', vision: 'No' },
     { id: 'llava:latest', label: 'Vision fallback (if available)', tags: 'multimodal', webSearch: 'Yes (via app tools)', vision: 'Yes (image input)' }
   ];
-
-  onMount(() => {
-    void (async () => {
-      try {
-        const saved = await getProviderApiKey('ollama-cloud');
-        if (saved) apiKey = saved;
-      } catch {
-        // Non-fatal; field stays empty.
-      }
-    })();
-  });
 
   async function saveKeyAndCloudMode() {
     try {
@@ -70,15 +58,15 @@
 
 <section class="card grid">
   <h3>☁️ Cloud AI Setup</h3>
-  <small class="muted">Cloud-only mode: sign in to Ollama, create key, paste once, then choose model.</small>
+  <small class="muted">You need an Ollama account for cloud models. If you do not have one, create it at ollama.com, then generate a free API key and paste it here.</small>
 
   <div class="actions link-actions">
-    <button class="btn" on:click={openOllama}>1) Open Ollama.com</button>
-    <button class="btn" on:click={openKeys}>2) Open API Keys</button>
+    <button class="btn" on:click={openOllama}>1) Open Ollama (create account)</button>
+    <button class="btn" on:click={openKeys}>2) Open API Keys (free key)</button>
     <button class="btn" on:click={openDocs}>Docs</button>
   </div>
 
-  <input bind:value={apiKey} placeholder="Paste Ollama API key" />
+  <input type="password" autocomplete="off" bind:value={apiKey} placeholder="Paste Ollama API key" />
 
   <label class="muted" for="cloud-model-preset">Model preset</label>
   <select id="cloud-model-preset" bind:value={selectedModel}>
