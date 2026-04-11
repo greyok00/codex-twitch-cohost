@@ -4,10 +4,10 @@ Cloud-first, low-latency Twitch AI co-host desktop app built with **Tauri (Rust 
 
 ## Download
 
-- **AppImage (Linux, available now):** `GreyOK Twitch Co-Host Bot_0.1.0_amd64.AppImage`
-- **Build path:** `src-tauri/target/release/bundle/appimage/`
-- **Releases page:** https://github.com/greyok00/codex-twitch-cohost/releases
-- **Windows `.exe` and macOS `.dmg`:** published from GitHub Actions release builds (currently untested).
+- **Releases page (main downloads):** https://github.com/greyok00/codex-twitch-cohost/releases
+- **Linux `.AppImage`:** available now in release assets.
+- **Windows `.exe` and macOS `.dmg`:** included in release assets as they publish (currently untested / coming soon for stable support).
+- **Local build output path:** `src-tauri/target/release/bundle/appimage/`
 
 ## Features
 
