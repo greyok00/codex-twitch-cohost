@@ -22,6 +22,8 @@ pub struct DeviceCodeStart {
     pub interval: u64,
     pub user_code: String,
     pub verification_uri: String,
+    #[serde(default)]
+    pub verification_uri_complete: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

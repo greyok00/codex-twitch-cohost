@@ -1420,13 +1420,26 @@ pub async fn start_twitch_oauth(
             "content": format!("Open {} and confirm code {}", device_flow.verification_uri, device_flow.user_code),
             "timestamp": chrono::Utc::now().to_rfc3339()
         }));
+        let verification_url = device_flow
+            .verification_uri_complete
+            .clone()
+            .unwrap_or_else(|| device_flow.verification_uri.clone());
+        let _ = app_handle.emit(
+            "oauth_device_code",
+            serde_json::json!({
+                "userCode": device_flow.user_code,
+                "verificationUri": device_flow.verification_uri,
+                "verificationUrl": verification_url,
+                "role": if is_streamer_role { "streamer" } else { "bot" },
+            }),
+        );
 
         let profile_name = auth_profile
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .unwrap_or("bot-default");
-        if let Err(err) = open_isolated_twitch_url(&app_handle, profile_name, &device_flow.verification_uri) {
+        if let Err(err) = open_isolated_twitch_url(&app_handle, profile_name, &verification_url) {
             let _ = app_handle.emit(
                 "timeline_event",
                 serde_json::json!({
@@ -1436,7 +1449,7 @@ pub async fn start_twitch_oauth(
                     "timestamp": chrono::Utc::now().to_rfc3339()
                 }),
             );
-            if let Err(fallback_err) = open_url_with_fallback(&device_flow.verification_uri) {
+            if let Err(fallback_err) = open_url_with_fallback(&verification_url) {
                 let msg = format!("failed opening browser: {fallback_err}");
                 shared.diagnostics.write().last_error = Some(msg.clone());
                 let _ = app_handle.emit("error_banner", msg);

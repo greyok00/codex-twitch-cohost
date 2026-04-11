@@ -15,6 +15,7 @@
   let showTools = false;
   let autoJoinInFlight = false;
   let autoJoinRetryScheduled = false;
+  let oauthCode: { userCode: string; verificationUri: string; verificationUrl: string; role: string } | null = null;
   $: canJoin = $authSessionsStore.botTokenPresent && $authSessionsStore.streamerTokenPresent;
   $: oauthConfigured = Boolean(clientId && clientId.trim() && clientId !== 'your_twitch_client_id' && clientId !== 'replace_client_id');
   $: nextStep = !$authSessionsStore.botTokenPresent
@@ -35,7 +36,7 @@
   }
 
   onMount(() => {
-    let cleanup = () => {};
+    const cleanups: Array<() => void> = [];
 
     void (async () => {
       try {
@@ -47,18 +48,30 @@
         // Keep defaults if settings are unavailable during first launch.
       }
 
-      cleanup = await listen<{
+      const unlistenProfile = await listen<{
         botUsername: string;
         channel: string;
         broadcasterLogin?: string | null;
       }>('oauth_profile_updated', (event) => {
         botUsername = event.payload.botUsername || botUsername;
         channel = event.payload.channel || channel;
+        oauthCode = null;
       });
+      cleanups.push(unlistenProfile);
+
+      const unlistenCode = await listen<{
+        userCode: string;
+        verificationUri: string;
+        verificationUrl: string;
+        role: string;
+      }>('oauth_device_code', (event) => {
+        oauthCode = event.payload;
+      });
+      cleanups.push(unlistenCode);
     })();
 
     return () => {
-      cleanup();
+      for (const cleanup of cleanups) cleanup();
     };
   });
 
@@ -157,6 +170,7 @@
       await loadAuthSessions();
       botUsername = '';
       channel = '';
+      oauthCode = null;
     } catch (error) {
       errorBannerStore.set('Reset auth sessions failed: ' + String(error));
     }
@@ -264,6 +278,20 @@
     </div>
   {/if}
 
+  {#if oauthCode}
+    <div class="oauth-code-card">
+      <small class="muted">
+        Authorization code for {oauthCode.role === 'streamer' ? 'Streamer' : 'Bot'} login
+      </small>
+      <div class="oauth-code-value">{oauthCode.userCode}</div>
+      <div class="actions">
+        <button class="btn" on:click={() => openExternal(oauthCode.verificationUrl)}>Open Twitch Activate Page</button>
+        <button class="btn" on:click={() => navigator.clipboard?.writeText(oauthCode.userCode)}>Copy Code</button>
+        <button class="btn" on:click={() => (oauthCode = null)}>Dismiss</button>
+      </div>
+    </div>
+  {/if}
+
   {#if botUsername || channel}
     <p class="muted">Signed-in bot: {botUsername || 'unknown'} | Target channel: {channel || 'unknown'}</p>
   {/if}
@@ -330,6 +358,21 @@
     border: 1px solid var(--line);
     border-radius: 10px;
     background: color-mix(in srgb, var(--panel), white 3%);
+  }
+  .oauth-code-card {
+    display: grid;
+    gap: 0.45rem;
+    margin-bottom: 0.75rem;
+    padding: 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--line), #22c55e 38%);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--panel), #22c55e 6%);
+  }
+  .oauth-code-value {
+    font-weight: 800;
+    font-size: 1.15rem;
+    letter-spacing: 0.1em;
+    color: var(--text);
   }
   .title-row {
     display: flex;
