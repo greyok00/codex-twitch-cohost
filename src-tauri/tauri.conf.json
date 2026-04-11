@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GreyOK_'s Twitch Co-Host Bot",
+  "productName": "GreyOK Twitch Co-Host Bot",
   "version": "0.1.0",
   "identifier": "com.streamtools.twitchcohostbot",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "GreyOK_'s Twitch Co-Host Bot",
+        "title": "GreyOK Twitch Co-Host Bot",
         "width": 1400,
         "height": 920,
         "resizable": true,
