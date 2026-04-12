@@ -274,7 +274,7 @@
   }
 </script>
 
-<section class="card">
+<section class="card auth-card">
   <h3 class="title-row">
     Twitch Login
     <span class="oauth-status">

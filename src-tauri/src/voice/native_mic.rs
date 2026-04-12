@@ -5,13 +5,12 @@ use tokio::time::{timeout, Duration};
 use crate::error::{AppError, AppResult};
 
 pub async fn capture_wav_base64(duration_ms: u64) -> AppResult<String> {
-    let safe_ms = duration_ms.clamp(800, 10_000);
-    let seconds = ((safe_ms as f64) / 1000.0).ceil() as u64;
+    let safe_ms = duration_ms.clamp(700, 8_000);
 
     let tmp = tempfile::tempdir().map_err(|e| AppError::Voice(format!("tempdir failed: {e}")))?;
     let wav_path = tmp.path().join("mic_chunk.wav");
 
-    capture_to_wav(&wav_path.to_string_lossy(), seconds).await?;
+    capture_to_wav(&wav_path.to_string_lossy(), safe_ms).await?;
 
     let bytes = tokio::fs::read(&wav_path)
         .await
@@ -23,18 +22,21 @@ pub async fn capture_wav_base64(duration_ms: u64) -> AppResult<String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
-async fn capture_to_wav(path: &str, seconds: u64) -> AppResult<()> {
+async fn capture_to_wav(path: &str, duration_ms: u64) -> AppResult<()> {
+    let seconds_precise = format!("{:.2}", (duration_ms as f64) / 1000.0);
+    let seconds_int = ((duration_ms as f64) / 1000.0).ceil() as u64;
+
     #[cfg(target_os = "linux")]
     {
-        if run_capture_cmd("arecord", &["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", &seconds.to_string(), "-t", "wav", path]).await.is_ok() {
+        if run_capture_cmd("ffmpeg", &["-y", "-f", "pulse", "-i", "default", "-t", &seconds_precise, "-ac", "1", "-ar", "16000", path]).await.is_ok() {
             return Ok(());
         }
 
-        if run_capture_cmd("ffmpeg", &["-y", "-f", "pulse", "-i", "default", "-t", &seconds.to_string(), "-ac", "1", "-ar", "16000", path]).await.is_ok() {
+        if run_capture_cmd("ffmpeg", &["-y", "-f", "alsa", "-i", "default", "-t", &seconds_precise, "-ac", "1", "-ar", "16000", path]).await.is_ok() {
             return Ok(());
         }
 
-        if run_capture_cmd("ffmpeg", &["-y", "-f", "alsa", "-i", "default", "-t", &seconds.to_string(), "-ac", "1", "-ar", "16000", path]).await.is_ok() {
+        if run_capture_cmd("arecord", &["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", &seconds_int.to_string(), "-t", "wav", path]).await.is_ok() {
             return Ok(());
         }
 
@@ -45,11 +47,11 @@ async fn capture_to_wav(path: &str, seconds: u64) -> AppResult<()> {
 
     #[cfg(target_os = "macos")]
     {
-        if run_capture_cmd("ffmpeg", &["-y", "-f", "avfoundation", "-i", ":0", "-t", &seconds.to_string(), "-ac", "1", "-ar", "16000", path]).await.is_ok() {
+        if run_capture_cmd("ffmpeg", &["-y", "-f", "avfoundation", "-i", ":0", "-t", &seconds_precise, "-ac", "1", "-ar", "16000", path]).await.is_ok() {
             return Ok(());
         }
 
-        if run_capture_cmd("sox", &["-d", "-c", "1", "-r", "16000", path, "trim", "0.0", &seconds.to_string()]).await.is_ok() {
+        if run_capture_cmd("sox", &["-d", "-c", "1", "-r", "16000", path, "trim", "0.0", &seconds_precise]).await.is_ok() {
             return Ok(());
         }
 
@@ -62,7 +64,7 @@ async fn capture_to_wav(path: &str, seconds: u64) -> AppResult<()> {
     {
         if run_capture_cmd(
             "ffmpeg",
-            &["-y", "-f", "dshow", "-i", "audio=default", "-t", &seconds.to_string(), "-ac", "1", "-ar", "16000", path],
+            &["-y", "-f", "dshow", "-i", "audio=default", "-t", &seconds_precise, "-ac", "1", "-ar", "16000", path],
         )
         .await
         .is_ok()

@@ -1,14 +1,9 @@
 <script lang="ts">
-  import { Button } from 'bits-ui';
   import { onDestroy, onMount } from 'svelte';
-  import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-  import { LogicalSize } from '@tauri-apps/api/dpi';
-  import Icon from './ui/Icon.svelte';
   import { getSavedAvatarImage, saveAvatarImage } from '../api/tauri';
   import { errorBannerStore } from '../stores/app';
   export let aiReady = false;
   export let chatReady = false;
-  export let voiceReady = false;
 
   let selectedName = '';
   let ready = false;
@@ -19,9 +14,7 @@
     ? 'Step order: connect AI first.'
     : !chatReady
       ? 'Step order: connect chat after AI.'
-      : !voiceReady
-        ? 'Step order: activate voice before avatar.'
-        : '';
+      : '';
   $: activationBlocked = activationBlockedReason.length > 0;
 
   onMount(() => {
@@ -67,7 +60,8 @@
     try {
       const saved = await getSavedAvatarImage();
       const fallback = '/floating-head.png';
-      const source = saved?.dataUrl || localStorage.getItem('cohost_avatar_image') || fallback;
+      const stored = localStorage.getItem('cohost_avatar_image')?.trim() || '';
+      const source = saved?.dataUrl || stored || fallback;
       selectedName = saved?.fileName || (source === fallback ? 'floating head.png' : 'saved-avatar');
       localStorage.setItem('cohost_avatar_image', source);
       const probe = new Image();
@@ -81,11 +75,16 @@
         ready = true;
       };
       probe.onerror = () => {
+        localStorage.setItem('cohost_avatar_image', fallback);
+        selectedName = 'floating head.png';
         ready = true;
       };
       probe.src = source;
     } catch (error) {
       errorBannerStore.set('Failed loading saved avatar image: ' + String(error));
+      localStorage.setItem('cohost_avatar_image', '/floating-head.png');
+      selectedName = 'floating head.png';
+      ready = true;
     }
   }
 
@@ -128,77 +127,23 @@
     reader.readAsDataURL(file);
   }
 
-  async function openPopup() {
-    if (activationBlocked) {
-      errorBannerStore.set(activationBlockedReason);
-      return;
-    }
-    try {
-      const existing = await WebviewWindow.getByLabel('cohost-avatar');
-      if (existing) {
-        try {
-          const raw = localStorage.getItem('cohost_avatar_size');
-          if (raw) {
-            const parsed = JSON.parse(raw) as { width?: number; height?: number };
-            const w = Math.max(320, Math.min(1200, Number(parsed.width || imageWidth) + 24));
-            const h = Math.max(420, Math.min(1500, Number(parsed.height || imageHeight) + 60));
-            await existing.setSize(new LogicalSize(w, h));
-          }
-        } catch {
-          // no-op
-        }
-        await existing.show();
-        await existing.setFocus();
-        window.setTimeout(() => syncAvatarAlignToPopup(), 120);
-        return;
-      }
-
-      let popupW = imageWidth + 24;
-      let popupH = imageHeight + 60;
-      try {
-        const raw = localStorage.getItem('cohost_avatar_size');
-        if (raw) {
-          const parsed = JSON.parse(raw) as { width?: number; height?: number };
-          popupW = Number(parsed.width || popupW) + 24;
-          popupH = Number(parsed.height || popupH) + 60;
-        }
-      } catch {
-        // no-op
-      }
-      popupW = Math.max(320, Math.min(1200, popupW));
-      popupH = Math.max(420, Math.min(1500, popupH));
-
-      const win = new WebviewWindow('cohost-avatar', {
-        url: '/avatar-popup.html',
-        title: 'Cohost Avatar',
-        width: popupW,
-        height: popupH,
-        minWidth: 420,
-        minHeight: 520,
-        resizable: true,
-        alwaysOnTop: true,
-        transparent: true,
-        backgroundColor: '#00000000'
-      });
-
-      win.once('tauri://error', (e) => {
-        errorBannerStore.set(`Failed to open avatar window: ${String((e as { payload?: unknown })?.payload ?? 'unknown error')}`);
-      });
-      window.setTimeout(() => syncAvatarAlignToPopup(), 260);
-    } catch (error) {
-      errorBannerStore.set(`Failed to open avatar window: ${String(error)}`);
-    }
+  $: if (ready) {
+    window.setTimeout(() => syncAvatarAlignToPopup(), 80);
   }
+
 </script>
 
 <section class="card grid">
   <h3>Avatar Popup (OBS Layer)</h3>
-  <small class="muted">Upload a PNG with transparency, or use default `floating head.png`. Bot speech drives mouth + brow animation in real time.</small>
+  <small class="muted">Upload a PNG with transparency, or use default `floating head.png`. Avatar is docked to the right of chat in the main window.</small>
   {#if activationBlocked}
     <small class="muted">{activationBlockedReason}</small>
   {/if}
-  <input type="file" accept="image/*" on:change={onPhotoPick} />
+  <small class="muted">Rig controls are on the main avatar image (top-left panel). Use the on-image `Rig controls` button.</small>
+  <div class="avatar-upload">
+    <label class="muted" for="avatar-upload-input">Avatar image</label>
+    <input id="avatar-upload-input" type="file" accept="image/*" on:change={onPhotoPick} />
+  </div>
   {#if selectedName}<small>Saved avatar: {selectedName}</small>{/if}
-  <Button.Root class="p-btn" on:click={openPopup} disabled={!ready || activationBlocked}><Icon name="avatar" />Open Avatar Popup</Button.Root>
-  <small class="muted">In OBS Browser Source (dev): `http://localhost:1420/avatar-popup.html`</small>
+  <small class="muted">Changes apply immediately to the docked avatar.</small>
 </section>

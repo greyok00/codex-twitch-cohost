@@ -9,7 +9,7 @@
   import { getSavedAvatarImage, savePersonality } from '../api/tauri';
 
   let local: PersonalityProfile = { ...$personalityStore, master_prompt_override: $personalityStore.master_prompt_override ?? '' };
-  let selectedPreset = 'default-cohost';
+  let selectedPreset = 'hood-bitch';
   let avatarPreview: string | null = null;
 
   let tabooInput = '';
@@ -119,7 +119,8 @@
 
   onMount(async () => {
     if (!$personalityStore || !$personalityStore.name?.trim()) {
-      local = { ...presets[0].profile };
+      const defaultPreset = presets.find((p) => p.id === 'hood-bitch') ?? presets[0];
+      local = { ...defaultPreset.profile };
       syncInputsFromLocal();
       void save();
     } else {

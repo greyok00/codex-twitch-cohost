@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import type { AppStatus, AuthSessions, ChatMessage, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport } from '../types';
+import type { AppStatus, AuthSessions, ChatMessage, DebugBundleResult, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport, ServiceHealthReport } from '../types';
 
 export const statusStore = writable<AppStatus>({
   model: 'llama3.1:8b-instruct',
@@ -48,3 +48,5 @@ export const authSessionsStore = writable<AuthSessions>({
 });
 
 export const selfTestReportStore = writable<SelfTestReport | null>(null);
+export const serviceHealthStore = writable<ServiceHealthReport | null>(null);
+export const debugBundleStore = writable<DebugBundleResult | null>(null);

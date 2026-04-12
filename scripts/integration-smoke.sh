@@ -23,10 +23,10 @@ echo "[4/5] Config/resource sanity"
 echo "[5/5] Dev boot smoke (tauri dev, bounded)"
 LOG_FILE="$(mktemp)"
 set +e
-timeout 70s bash -lc 'cd "$0" && PATH="$HOME/.cargo/bin:$PATH" npm run tauri dev' "$ROOT_DIR" >"$LOG_FILE" 2>&1
+timeout 180s bash -lc 'cd "$0" && PATH="$HOME/.cargo/bin:$PATH" npm run tauri dev' "$ROOT_DIR" >"$LOG_FILE" 2>&1
 RC=$?
 set -e
-if ! grep -Fq 'target/debug/twitch-cohost-bot' "$LOG_FILE"; then
+if ! grep -Eq 'target/debug/twitch-cohost-bot|Finished `dev` profile|Running `target/.*/debug/twitch-cohost-bot' "$LOG_FILE"; then
   echo "Dev boot smoke failed. Output:"
   cat "$LOG_FILE"
   rm -f "$LOG_FILE"

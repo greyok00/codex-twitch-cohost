@@ -103,6 +103,21 @@
       font-weight: 700;
     }
     .ui-hidden .align-panel, .ui-hidden .hint { display: none; }
+    body.embed {
+      background: transparent;
+    }
+    body.embed .hint,
+    body.embed .align-panel,
+    body.embed .ui-toggle-fab {
+      display: none !important;
+    }
+    body.embed .avatar-wrap {
+      max-width: 100%;
+      max-height: 100%;
+    }
+    body.embed #avatar {
+      max-height: 100%;
+    }
 
     .mouth {
       position: absolute;
@@ -203,6 +218,9 @@
   <button id="uiFab" class="ui-toggle-fab" type="button">Hide UI</button>
 
   <script>
+    const embedMode = new URLSearchParams(window.location.search).get('embed') === '1';
+    if (embedMode) document.body.classList.add('embed');
+
     const wrap = document.getElementById('wrap');
     const mouth = document.getElementById('mouth');
     const brows = document.getElementById('brows');
@@ -310,8 +328,15 @@
     }
 
     function loadImage() {
-      const src = localStorage.getItem('cohost_avatar_image');
-      if (src) avatar.src = src;
+      const fallback = '/floating-head.png';
+      const src = (localStorage.getItem('cohost_avatar_image') || '').trim() || fallback;
+      localStorage.setItem('cohost_avatar_image', src);
+      avatar.onerror = () => {
+        avatar.onerror = null;
+        avatar.src = fallback;
+        localStorage.setItem('cohost_avatar_image', fallback);
+      };
+      avatar.src = src;
     }
 
     const VISEMES = ['rest', 'a', 'e', 'o', 'm', 'f'];
@@ -372,9 +397,13 @@
       } else {
         wrap.classList.remove('speaking');
         root.style.setProperty('--brow-lift', '0%');
-        setViseme('rest');
+        if (!mouth.classList.contains('viseme-rest')) setViseme('rest');
       }
-      requestAnimationFrame(tick);
+      if (now < speakingUntil) {
+        requestAnimationFrame(tick);
+      } else {
+        window.setTimeout(() => requestAnimationFrame(tick), 120);
+      }
     }
 
     function dragAnchor(el, updater, clampY = [10, 90]) {
@@ -433,16 +462,20 @@
       setBrowStyle(defaults.browStyle);
     });
 
-    applyUiHidden(localStorage.getItem('cohost_avatar_ui_hidden_v1') === '1');
-    toggleUi.addEventListener('click', () => applyUiHidden(!document.body.classList.contains('ui-hidden')));
-    uiFab.addEventListener('click', () => applyUiHidden(!document.body.classList.contains('ui-hidden')));
-    window.addEventListener('keydown', (e) => {
-      if (e.key.toLowerCase() === 'h') applyUiHidden(!document.body.classList.contains('ui-hidden'));
-    });
+    if (!embedMode) {
+      applyUiHidden(localStorage.getItem('cohost_avatar_ui_hidden_v1') === '1');
+      toggleUi.addEventListener('click', () => applyUiHidden(!document.body.classList.contains('ui-hidden')));
+      uiFab.addEventListener('click', () => applyUiHidden(!document.body.classList.contains('ui-hidden')));
+      window.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === 'h') applyUiHidden(!document.body.classList.contains('ui-hidden'));
+      });
 
-    dragAnchor(mouth, (p) => updateMouth({ x: p.x, y: p.y }), [10, 95]);
-    dragAnchor(browLeft, (p) => updateBrows({ x: p.x, y: p.y }), [5, 70]);
-    dragAnchor(browRight, (p) => updateBrows({ x: p.x, y: p.y }), [5, 70]);
+      dragAnchor(mouth, (p) => updateMouth({ x: p.x, y: p.y }), [10, 95]);
+      dragAnchor(browLeft, (p) => updateBrows({ x: p.x, y: p.y }), [5, 70]);
+      dragAnchor(browRight, (p) => updateBrows({ x: p.x, y: p.y }), [5, 70]);
+    } else {
+      applyUiHidden(true);
+    }
 
     window.addEventListener('storage', (e) => {
       if (e.key === 'cohost_avatar_image') loadImage();

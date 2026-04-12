@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { Tabs } from 'bits-ui';
   import { autoConfigureSttFast, getSttConfig, loadAuthSessions, loadPersonality, loadStatus, openExternal, registerEventListeners } from '../api/tauri';
   import { errorBannerStore } from '../stores/app';
   import { authSessionsStore, diagnosticsStore, statusStore } from '../stores/app';
@@ -9,12 +8,11 @@
   import CloudSetupCard from './CloudSetupCard.svelte';
   import PersonalityEditor from './PersonalityEditor.svelte';
   import MemoryPanel from './MemoryPanel.svelte';
-  import DiagnosticsPanel from './DiagnosticsPanel.svelte';
-  import SelfTestPanel from './SelfTestPanel.svelte';
   import VoicePanel from './VoicePanel.svelte';
   import AvatarPanel from './AvatarPanel.svelte';
+  import YoutubeCohostPanel from './YoutubeCohostPanel.svelte';
 
-  type PaneId = 'auth' | 'ai' | 'voice' | 'memory' | 'diagnostics' | 'about';
+  type PaneId = 'auth' | 'cloud' | 'personality' | 'voice' | 'avatar' | 'memory' | 'about';
 
   let sttReady = false;
   let sttTimer: number | null = null;
@@ -24,11 +22,9 @@
   $: authReady = $authSessionsStore.botTokenPresent && $authSessionsStore.streamerTokenPresent;
   $: aiReady = $diagnosticsStore.providerState === 'connected';
   $: chatReady = $statusStore.twitchState === 'connected';
-  $: voiceReady = !!$statusStore.voiceEnabled;
 
   $: alertAuth = !authReady;
   $: alertAi = !aiReady;
-  $: alertVoice = !sttReady;
 
   onMount(async () => {
     try {
@@ -75,15 +71,11 @@
     }
   }
 
-  function onPaneChange(next: string | undefined) {
-    if (!next) return;
-    activePane = next as PaneId;
-  }
-
   const socialLinks = [
     { label: 'GitHub', handle: '@greyok00', url: 'https://github.com/greyok00', icon: '/social/github.svg' },
     { label: 'Twitch', handle: '@greyok__', url: 'https://twitch.tv/greyok__', icon: '/social/twitch.svg' },
-    { label: 'YouTube', handle: '@GreyOK_0', url: 'https://www.youtube.com/@GreyOK_0', icon: '/social/youtube.svg' }
+    { label: 'YouTube', handle: '@GreyOK_0', url: 'https://www.youtube.com/@GreyOK_0', icon: '/social/youtube.svg' },
+    { label: 'Discord', handle: "GreyOK_'s Discord", url: 'https://discord.gg/TJcr6ZxJ', icon: '/social/discord.svg' }
   ] as const;
 
   async function openLink(url: string) {
@@ -96,29 +88,23 @@
 </script>
 
 <main class="app-shell">
-  <header class="topbar topbar-logo-only">
-    <img src="/top-logo.png" alt="App logo" class="top-logo" />
-  </header>
-
-  {#if $errorBannerStore}
-    <section class="error-banner">{$errorBannerStore}</section>
-  {/if}
-
   <section class="chat-wrap">
     <SessionChatPanel />
+    <YoutubeCohostPanel compact={true} />
   </section>
 
-  <Tabs.Root value={activePane} onValueChange={onPaneChange} orientation="vertical" class="layout">
+  <section class="layout">
     <aside class="sidebar">
       <h3>Control Center</h3>
-      <Tabs.List class="tab-list">
-        <Tabs.Trigger value="auth" class="tab-trigger {alertAuth ? 'alert' : ''}">Auth & Channel</Tabs.Trigger>
-        <Tabs.Trigger value="ai" class="tab-trigger {alertAi ? 'alert' : ''}">AI Setup</Tabs.Trigger>
-        <Tabs.Trigger value="voice" class="tab-trigger {alertVoice ? 'alert' : ''}">Voice Input</Tabs.Trigger>
-        <Tabs.Trigger value="memory" class="tab-trigger">Memory</Tabs.Trigger>
-        <Tabs.Trigger value="diagnostics" class="tab-trigger">Diagnostics</Tabs.Trigger>
-        <Tabs.Trigger value="about" class="tab-trigger">About</Tabs.Trigger>
-      </Tabs.List>
+      <div class="tab-list">
+        <button type="button" class="tab-trigger {activePane === 'auth' ? 'active' : ''} {alertAuth ? 'alert' : ''}" on:click={() => (activePane = 'auth')}>Auth & Channel</button>
+        <button type="button" class="tab-trigger {activePane === 'cloud' ? 'active' : ''} {alertAi ? 'alert' : ''}" on:click={() => (activePane = 'cloud')}>Cloud AI</button>
+        <button type="button" class="tab-trigger {activePane === 'personality' ? 'active' : ''}" on:click={() => (activePane = 'personality')}>Personality</button>
+        <button type="button" class="tab-trigger {activePane === 'voice' ? 'active' : ''}" on:click={() => (activePane = 'voice')}>Settings</button>
+        <button type="button" class="tab-trigger {activePane === 'avatar' ? 'active' : ''}" on:click={() => (activePane = 'avatar')}>Avatar</button>
+        <button type="button" class="tab-trigger {activePane === 'memory' ? 'active' : ''}" on:click={() => (activePane = 'memory')}>Memory</button>
+        <button type="button" class="tab-trigger {activePane === 'about' ? 'active' : ''}" on:click={() => (activePane = 'about')}>About</button>
+      </div>
 
       <div class="status-list">
         <small>Bot: {authReady ? 'ready' : 'missing'}</small>
@@ -129,37 +115,19 @@
     </aside>
 
     <section class="content">
-      <Tabs.Content value="auth" class="tab-panel">
+      {#if activePane === 'auth'}
         <TwitchLoginCard />
-      </Tabs.Content>
-
-      <Tabs.Content value="ai" class="tab-panel">
-        <div class="ai-stack">
-          <div class="two-col">
-            <CloudSetupCard />
-            <PersonalityEditor />
-          </div>
-          <AvatarPanel aiReady={aiReady} chatReady={chatReady} voiceReady={voiceReady} />
-        </div>
-      </Tabs.Content>
-
-      <Tabs.Content value="voice" class="tab-panel">
+      {:else if activePane === 'cloud'}
+        <CloudSetupCard />
+      {:else if activePane === 'personality'}
+        <PersonalityEditor />
+      {:else if activePane === 'voice'}
         <VoicePanel aiReady={aiReady} chatReady={chatReady} />
-      </Tabs.Content>
-
-      <Tabs.Content value="memory" class="tab-panel">
+      {:else if activePane === 'avatar'}
+        <AvatarPanel aiReady={aiReady} chatReady={chatReady} />
+      {:else if activePane === 'memory'}
         <MemoryPanel />
-      </Tabs.Content>
-
-      <Tabs.Content value="diagnostics" class="tab-panel">
-        <DiagnosticsPanel />
-        <section class="card-lite">
-          <h3>Self Test</h3>
-          <SelfTestPanel />
-        </section>
-      </Tabs.Content>
-
-      <Tabs.Content value="about" class="tab-panel">
+      {:else}
         <section class="card about-card">
           <div class="about-head">
             <img src="/top-logo.png" alt="GreyOK" class="about-logo" />
@@ -180,7 +148,7 @@
             {/each}
           </div>
         </section>
-      </Tabs.Content>
+      {/if}
     </section>
-  </Tabs.Root>
+  </section>
 </main>

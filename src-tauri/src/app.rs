@@ -13,6 +13,7 @@ use tracing::{error, info, warn};
 use rand::seq::SliceRandom;
 
 use crate::{
+    config::ProviderConfig,
     config::AppConfig,
     llm::provider::LlmService,
     memory::store::MemoryStore,
@@ -23,6 +24,31 @@ use crate::{
     twitch::eventsub::{smoke_test_streamer_api, EventSubService},
     twitch::irc::TwitchIrcService,
 };
+
+fn normalize_provider_model(provider: &mut ProviderConfig) {
+    let model = provider.model.trim().to_lowercase();
+    let cloud = provider.name.eq_ignore_ascii_case("ollama-cloud");
+    if model.is_empty() {
+        provider.model = if cloud {
+            "qwen3:8b".to_string()
+        } else {
+            "llama3.1:8b-instruct".to_string()
+        };
+        return;
+    }
+    if cloud {
+        if model.contains("qwen2.5vl")
+            || model.contains("mistral-small:24b-instruct")
+            || model.contains("qwen2.5:14b-instruct")
+            || model.contains("llama3.1:8b-instruct")
+            || model.contains("llama3.3:70b-instruct")
+        {
+            provider.model = "qwen3:8b".to_string();
+        }
+    } else if model.contains("qwen2.5vl") {
+        provider.model = "llama3.1:8b-instruct".to_string();
+    }
+}
 
 pub fn bootstrap(app: AppHandle) -> Result<AppState, String> {
     let (config, startup_error) = match AppConfig::load() {
@@ -119,7 +145,12 @@ pub fn bootstrap(app: AppHandle) -> Result<AppState, String> {
         response_queue_tx: queue_tx,
         recent_chat: RwLock::new(VecDeque::new()),
         recent_event_replies: RwLock::new(VecDeque::new()),
+        recent_bot_replies: RwLock::new(VecDeque::new()),
         local_prompt_counter: RwLock::new(0),
+        llm_hiccup_notice_sent: RwLock::new(false),
+        local_chat_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+        chat_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+        event_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         stt_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         tts_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         search_gate: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -147,7 +178,7 @@ fn spawn_diagnostics_publisher(app: AppHandle, state: AppState) {
                 let _ = app.emit("diagnostics_state", d.clone());
             }
             let _ = app.emit("status_updated", state.0.get_status());
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     });
 }
@@ -155,15 +186,26 @@ fn spawn_diagnostics_publisher(app: AppHandle, state: AppState) {
 fn spawn_pipeline_worker(app: AppHandle, state: Arc<SharedState>, mut rx: mpsc::Receiver<PipelineInput>) {
     tauri::async_runtime::spawn(async move {
         while let Some(item) = rx.recv().await {
+            let app = app.clone();
+            let state = state.clone();
             match item {
                 PipelineInput::Chat(chat) => {
-                    process_chat_input(&app, &state, chat, true).await;
+                    tauri::async_runtime::spawn(async move {
+                        let _permit = state.chat_gate.clone().acquire_owned().await;
+                        process_chat_input(&app, &state, chat, true).await;
+                    });
                 }
                 PipelineInput::LocalChat(chat) => {
-                    process_chat_input(&app, &state, chat, false).await;
+                    tauri::async_runtime::spawn(async move {
+                        let _permit = state.local_chat_gate.clone().acquire_owned().await;
+                        process_chat_input(&app, &state, chat, false).await;
+                    });
                 }
                 PipelineInput::Event(event) => {
-                    process_event_input(&app, &state, event).await;
+                    tauri::async_runtime::spawn(async move {
+                        let _permit = state.event_gate.clone().acquire_owned().await;
+                        process_event_input(&app, &state, event).await;
+                    });
                 }
                 PipelineInput::Manual(text) => {
                     send_bot_message(&app, &state, text, false);
@@ -203,6 +245,30 @@ fn remember_event_reply(state: &SharedState, text: &str) {
     let mut q = state.recent_event_replies.write();
     q.push_front(normalized);
     while q.len() > 80 {
+        q.pop_back();
+    }
+}
+
+fn has_recent_bot_reply(state: &SharedState, text: &str) -> bool {
+    let normalized = normalize_for_dedupe(text);
+    if normalized.is_empty() {
+        return false;
+    }
+    state
+        .recent_bot_replies
+        .read()
+        .iter()
+        .any(|v| v == &normalized)
+}
+
+fn remember_bot_reply(state: &SharedState, text: &str) {
+    let normalized = normalize_for_dedupe(text);
+    if normalized.is_empty() {
+        return;
+    }
+    let mut q = state.recent_bot_replies.write();
+    q.push_front(normalized);
+    while q.len() > 60 {
         q.pop_back();
     }
 }
@@ -279,6 +345,17 @@ async fn process_event_input(app: &AppHandle, state: &SharedState, event: EventM
     let config = state.config.read().clone();
     let profile = state.personality.read().clone();
     let mut primary_provider = config.providers.primary.clone();
+    normalize_provider_model(&mut primary_provider);
+    if primary_provider.model.trim().is_empty() {
+        send_bot_message(
+            app,
+            state,
+            "No LLM model selected. Open AI Setup and pick a model preset, then enable cloud mode."
+                .to_string(),
+            false,
+        );
+        return;
+    }
     if primary_provider.api_key.is_none() {
         primary_provider.api_key = state
             .secrets
@@ -288,6 +365,7 @@ async fn process_event_input(app: &AppHandle, state: &SharedState, event: EventM
     }
     let mut fallback_providers = config.providers.fallbacks.clone();
     for provider in &mut fallback_providers {
+        normalize_provider_model(provider);
         if provider.api_key.is_none() {
             provider.api_key = state
                 .secrets
@@ -299,7 +377,7 @@ async fn process_event_input(app: &AppHandle, state: &SharedState, event: EventM
 
     let memory = state
         .memory
-        .recent(config.memory.max_recent_messages)
+        .recent(config.memory.max_recent_messages.min(8))
         .unwrap_or_default()
         .into_iter()
         .map(|m| m.content)
@@ -314,7 +392,7 @@ async fn process_event_input(app: &AppHandle, state: &SharedState, event: EventM
         *state.voice_enabled.read(),
     );
     let user_prompt = format!(
-        "EventSub alert received.\nKind: {}\nDetails: {}\nWrite one short, very funny, personality-matching reaction for Twitch chat. Must be context-aware and different from prior event replies.",
+        "EventSub alert received.\nKind: {}\nDetails: {}\nWrite one short personality-matching reaction under 18 words. Keep it funny, specific, and different from prior event replies.",
         event.kind, event.content
     );
 
@@ -377,7 +455,7 @@ async fn process_chat_input(
     let force_reply = contains_chatbot_keyword(&chat.content)
         || (send_to_twitch && is_directly_addressed(state, &chat));
 
-    if !send_to_twitch && looks_unclear_input(&chat.content) {
+    if !send_to_twitch && !force_reply && looks_unclear_input(&chat.content) {
         send_bot_message(app, state, funny_clarification_prompt(), false);
         return;
     }
@@ -402,7 +480,11 @@ async fn process_chat_input(
         return;
     }
 
+    let cohost_mode = state.config.read().behavior.cohost_mode;
     if send_to_twitch {
+        if !cohost_mode && !force_reply {
+            return;
+        }
         // Always reply when explicitly invoked with the keyword.
         if !force_reply {
             let n = {
@@ -425,6 +507,7 @@ async fn process_chat_input(
     let config = state.config.read().clone();
     let profile = state.personality.read().clone();
     let mut primary_provider = config.providers.primary.clone();
+    normalize_provider_model(&mut primary_provider);
     if primary_provider.api_key.is_none() {
         primary_provider.api_key = state
             .secrets
@@ -434,6 +517,7 @@ async fn process_chat_input(
     }
     let mut fallback_providers = config.providers.fallbacks.clone();
     for provider in &mut fallback_providers {
+        normalize_provider_model(provider);
         if provider.api_key.is_none() {
             provider.api_key = state
                 .secrets
@@ -445,7 +529,7 @@ async fn process_chat_input(
 
     let memory = state
         .memory
-        .recent(config.memory.max_recent_messages)
+        .recent(config.memory.max_recent_messages.min(16))
         .unwrap_or_default()
         .into_iter()
         .map(|m| m.content)
@@ -461,7 +545,17 @@ async fn process_chat_input(
         *state.voice_enabled.read(),
     );
 
-    let user_prompt = format!("Viewer {} said: {}", chat.user, chat.content);
+    let user_prompt = if send_to_twitch {
+        format!(
+            "Viewer {} said: {}\nAnswer the actual point of that line first. Reference one concrete detail from it. If the line is ambiguous, ask one short clarifying question instead of roasting. Keep it under 22 words and stay on topic.",
+            chat.user, chat.content
+        )
+    } else {
+        format!(
+            "Streamer {} said: {}\nReply in 1 or 2 conversational sentences under 36 words. Answer clearly, reference one concrete detail from what they said, and only joke if it improves the reply. If the transcript is partial, ask one short clarifying question tied to what you did hear.",
+            chat.user, chat.content
+        )
+    };
     let response = state
         .llm
         .generate(
@@ -476,6 +570,24 @@ async fn process_chat_input(
         Ok(mut text) => {
             text = sanitize_bot_output(&text);
             text = text.chars().take(config.moderation.max_reply_chars).collect();
+            if has_recent_bot_reply(state, &text) {
+                let retry_prompt = format!(
+                    "{user_prompt}\nDo not repeat recent bot wording. Give a clearly different reply that still answers directly."
+                );
+                if let Ok(mut retried) = state
+                    .llm
+                    .generate(
+                        &primary_provider,
+                        &fallback_providers,
+                        &system_prompt,
+                        &retry_prompt,
+                    )
+                    .await
+                {
+                    retried = sanitize_bot_output(&retried);
+                    text = retried.chars().take(config.moderation.max_reply_chars).collect();
+                }
+            }
             if text.is_empty() {
                 return;
             }
@@ -488,13 +600,23 @@ async fn process_chat_input(
         }
         Err(err) => {
             set_error(app, state, format!("LLM generation failed: {err}"));
-            send_bot_message(
-                app,
-                state,
-                "I hit a model hiccup. Ask me again in a second and I will jump back in."
-                    .to_string(),
-                false,
-            );
+            let should_announce = !*state.llm_hiccup_notice_sent.read();
+            if should_announce {
+                *state.llm_hiccup_notice_sent.write() = true;
+                let lower = err.to_string().to_lowercase();
+                let msg = if lower.contains("401")
+                    || lower.contains("unauthorized")
+                    || lower.contains("api key")
+                    || lower.contains("invalid oauth token")
+                {
+                    "Model auth missing. Save your Ollama API key once in AI Setup and retry."
+                } else if lower.contains("model") && lower.contains("not found") {
+                    "Selected model was not found. In AI Setup, click Check Cloud Models and pick one from your account."
+                } else {
+                    "Model hiccup. Ask again in a second."
+                };
+                send_bot_message(app, state, msg.to_string(), false);
+            }
         }
     }
 }
@@ -569,19 +691,19 @@ fn looks_unclear_input(input: &str) -> bool {
         return true;
     }
     let lower = text.to_lowercase();
-    if lower.contains("???") || lower.contains("...") {
+    if lower.contains("???") {
         return true;
     }
     let words = lower
         .split_whitespace()
         .filter(|w| !w.is_empty())
         .collect::<Vec<_>>();
-    if words.len() <= 2 && text.len() <= 18 {
-        return true;
-    }
     let letters = lower.chars().filter(|c| c.is_ascii_alphabetic()).count();
     let digits = lower.chars().filter(|c| c.is_ascii_digit()).count();
-    if letters + digits < 4 {
+    if letters + digits < 2 {
+        return true;
+    }
+    if words.len() <= 1 && letters < 4 && digits == 0 {
         return true;
     }
     false
@@ -592,7 +714,6 @@ fn funny_clarification_prompt() -> String {
     let options = [
         "My brain lagged. Say that again slower so I can cook.",
         "I heard half a sentence and a ghost. Hit me one more time.",
-        "Translation failed with style. Can you repeat that clearly?",
         "That came through like cursed subtitles. Say it again for me.",
         "My ears buffered at 240p. Repeat that and I got you.",
         "I caught fragments, not the plot. Give me that line again.",
@@ -729,11 +850,16 @@ fn load_pending_todos(state: &SharedState, max_scan: usize) -> Vec<ScheduledTodo
 }
 
 fn send_bot_message(app: &AppHandle, state: &SharedState, content: String, send_to_twitch: bool) {
+    let _ = send_to_twitch;
     let content = sanitize_bot_output(&content);
     if content.is_empty() {
         return;
     }
-    if send_to_twitch && state.twitch.is_connected() {
+    if has_recent_bot_reply(state, &content) {
+        return;
+    }
+    remember_bot_reply(state, &content);
+    if state.twitch.is_connected() {
         let twitch = state.twitch.clone();
         let msg = content.clone();
         let app_clone = app.clone();

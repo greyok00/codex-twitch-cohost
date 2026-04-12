@@ -3,6 +3,7 @@ node_modules
 .DS_Store
 dist
 .vite
+.venv-edge-tts
 *.log
 .env
 src-tauri/target

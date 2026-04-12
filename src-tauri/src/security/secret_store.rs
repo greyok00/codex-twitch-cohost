@@ -192,3 +192,42 @@ impl SecretStore {
             .map_err(|e| AppError::SecretStore(format!("failed writing {}: {e}", path.display())))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SecretStore;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn twitch_sessions_persist_and_clear_from_local_store() {
+        let _guard = env_lock().lock().expect("env lock");
+        let dir = tempfile::tempdir().expect("tempdir");
+        #[cfg(not(target_os = "windows"))]
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        }
+        #[cfg(target_os = "windows")]
+        unsafe {
+            std::env::set_var("APPDATA", dir.path());
+        }
+
+        let store = SecretStore::new();
+        store
+            .set_twitch_token("bot_user", "oauth:test")
+            .expect("set token");
+        assert_eq!(
+            store.get_twitch_token("bot_user").expect("get token"),
+            Some("oauth:test".to_string())
+        );
+
+        store
+            .clear_twitch_session("bot_user")
+            .expect("clear session");
+        assert_eq!(store.get_twitch_token("bot_user").expect("get token"), None);
+    }
+}

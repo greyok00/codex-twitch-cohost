@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
-import type { AppStatus, AuthSessions, AvatarImage, ChatMessage, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceRuntimeReport } from '../types';
-import { authSessionsStore, botLogStore, chatStore, diagnosticsStore, errorBannerStore, eventStore, personalityStore, selfTestReportStore, statusStore } from '../stores/app';
+import type { AppStatus, AuthSessions, AvatarImage, BehaviorSettings, ChatMessage, DebugBundleResult, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport, ServiceHealthReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceRuntimeReport } from '../types';
+import type { RemarkGenerationRequest, RemarkResponse } from '../youtube/types';
+import { authSessionsStore, botLogStore, chatStore, debugBundleStore, diagnosticsStore, errorBannerStore, eventStore, personalityStore, selfTestReportStore, serviceHealthStore, statusStore } from '../stores/app';
 
 let runtimeTtsVoiceName: string | null = null;
 let runtimeTtsVolume = 100;
@@ -93,6 +94,14 @@ export async function getProviderApiKey(providerName: string): Promise<string | 
   return invoke<string | null>('get_provider_api_key', { providerName });
 }
 
+export async function getProviderModels(providerName: string): Promise<string[]> {
+  return invoke<string[]>('get_provider_models', { providerName });
+}
+
+export async function fetchYoutubeTimedtext(videoId: string): Promise<string> {
+  return invoke<string>('fetch_youtube_timedtext', { videoId });
+}
+
 export async function configureCloudOnlyMode(model: string): Promise<void> {
   await invoke('configure_cloud_only_mode', { model });
 }
@@ -103,6 +112,14 @@ export async function setVoiceEnabled(enabled: boolean): Promise<void> {
 
 export async function setLurkMode(enabled: boolean): Promise<void> {
   await invoke('set_lurk_mode', { enabled });
+}
+
+export async function getBehaviorSettings(): Promise<BehaviorSettings> {
+  return invoke<BehaviorSettings>('get_behavior_settings');
+}
+
+export async function setBehaviorSettings(cohostMode: boolean, scheduledMessagesMinutes: number | null): Promise<void> {
+  await invoke('set_behavior_settings', { cohostMode, scheduledMessagesMinutes });
 }
 
 export async function searchWeb(query: string): Promise<string> {
@@ -119,6 +136,10 @@ export async function openIsolatedTwitchWindow(profileName: string, url: string)
 
 export async function summarizeChat(): Promise<string> {
   return invoke<string>('summarize_chat');
+}
+
+export async function generateYoutubeRemark(input: RemarkGenerationRequest): Promise<RemarkResponse> {
+  return invoke<RemarkResponse>('generate_youtube_remark', { input });
 }
 
 export async function loadPersonality(): Promise<void> {
@@ -139,6 +160,18 @@ export async function runSelfTest(): Promise<SelfTestReport> {
   const report = await invoke<SelfTestReport>('run_self_test');
   selfTestReportStore.set(report);
   return report;
+}
+
+export async function getServiceHealth(): Promise<ServiceHealthReport> {
+  const report = await invoke<ServiceHealthReport>('get_service_health');
+  serviceHealthStore.set(report);
+  return report;
+}
+
+export async function exportDebugBundle(): Promise<DebugBundleResult> {
+  const result = await invoke<DebugBundleResult>('export_debug_bundle');
+  debugBundleStore.set(result);
+  return result;
 }
 
 export async function handleVoiceCommand(input: string): Promise<string> {
@@ -336,7 +369,18 @@ export async function registerEventListeners(): Promise<void> {
     statusStore.set(event.payload);
   });
   await listen<string>('error_banner', (event) => {
-    errorBannerStore.set(event.payload);
+    const msg = String(event.payload || '').trim();
+    if (!msg) return;
+    eventStore.update((items) => [
+      {
+        id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        kind: 'error',
+        content: msg,
+        timestamp: new Date().toISOString()
+      },
+      ...items
+    ].slice(0, 250));
+    errorBannerStore.set('');
   });
   await listen('oauth_profile_updated', () => {
     void loadAuthSessions();

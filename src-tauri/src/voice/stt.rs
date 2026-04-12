@@ -64,8 +64,8 @@ pub async fn transcribe_file(config: &VoiceConfig, input_path: &PathBuf) -> AppR
     let output_prefix = tmp.path().join("transcript");
 
     let try_gpu = std::env::var("COHOST_STT_GPU")
-        .map(|v| v != "0")
-        .unwrap_or(true);
+        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false);
 
     let mut last_err: Option<AppError> = None;
     let mut completed = false;
@@ -152,6 +152,10 @@ async fn run_whisper(
     use_gpu: bool,
 ) -> AppResult<()> {
     let txt_path = output_prefix.with_extension("txt");
+    let thread_count = std::thread::available_parallelism()
+        .map(|n| n.get().clamp(2, 4))
+        .unwrap_or(2)
+        .to_string();
     // Precreate/clear so downstream always has a deterministic target path.
     let _ = fs::write(&txt_path, "");
 
@@ -164,7 +168,14 @@ async fn run_whisper(
         .arg("-nt")
         .arg("-np")
         .arg("-t")
-        .arg("2")
+        .arg(&thread_count)
+        .arg("-bo")
+        .arg("1")
+        .arg("-bs")
+        .arg("1")
+        .arg("-nf")
+        .arg("-mc")
+        .arg("0")
         .arg("-f")
         .arg(input_path)
         .arg("-otxt")

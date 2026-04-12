@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(not(target_os = "windows"))]
@@ -6,6 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use futures_util::StreamExt;
 use tauri::{AppHandle, Emitter, Manager};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use base64::Engine;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -107,6 +109,19 @@ fn is_invalid_oauth_error_message(message: &str) -> bool {
         || lower.contains("invalid oauth")
         || lower.contains("invalid token")
         || lower.contains("oauth token")
+}
+
+fn short_connect_joke() -> String {
+    let now = chrono::Local::now();
+    let time = now.format("%I:%M %p").to_string().trim_start_matches('0').to_string();
+    let jokes = [
+        "Chat linked. I promise only medium-bad decisions.",
+        "Connected. Chaos now has a schedule.",
+        "Online. My humor patch just deployed.",
+        "Connected. Sarcasm latency is nominal.",
+    ];
+    let idx = (now.timestamp() as usize) % jokes.len();
+    format!("{time} - {}", jokes[idx])
 }
 
 fn first_existing(candidates: &[PathBuf]) -> Option<String> {
@@ -386,7 +401,6 @@ fn edge_tts_candidates() -> Vec<String> {
     }
     bins.push("../.venv-edge-tts/bin/edge-tts".to_string());
     bins.push("./.venv-edge-tts/bin/edge-tts".to_string());
-    bins.push("/home/grey/codex-twitch-cohost/.venv-edge-tts/bin/edge-tts".to_string());
     bins.push("edge-tts".to_string());
     bins
 }
@@ -756,6 +770,180 @@ fn broadcaster_token_key(login: &str) -> String {
     format!("broadcaster:{}", normalize_login(login))
 }
 
+fn extract_xml_attr(tag: &str, attr: &str) -> Option<String> {
+    let needle = format!("{attr}=\"");
+    let start = tag.find(&needle)? + needle.len();
+    let rest = &tag[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn select_youtube_caption_track(track_list_xml: &str) -> Option<(String, String)> {
+    let mut first: Option<(String, String)> = None;
+    for chunk in track_list_xml.split("<track ").skip(1) {
+        let tag = match chunk.split('>').next() {
+            Some(value) => value,
+            None => continue,
+        };
+        let lang = extract_xml_attr(tag, "lang_code").unwrap_or_else(|| "en".to_string());
+        let name = extract_xml_attr(tag, "name").unwrap_or_default();
+        if first.is_none() {
+            first = Some((lang.clone(), name.clone()));
+        }
+        if lang.starts_with("en") {
+            return Some((lang, name));
+        }
+    }
+    first
+}
+
+fn find_balanced_json_array(input: &str, start_idx: usize) -> Option<&str> {
+    let bytes = input.as_bytes();
+    if *bytes.get(start_idx)? != b'[' {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escape = false;
+    for (offset, byte) in bytes[start_idx..].iter().enumerate() {
+        if in_string {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if *byte == b'\\' {
+                escape = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match *byte {
+            b'"' => in_string = true,
+            b'[' => depth += 1,
+            b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let end = start_idx + offset + 1;
+                    return input.get(start_idx..end);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_watch_caption_url(page_html: &str) -> Option<String> {
+    let marker = "\"captionTracks\":";
+    let marker_idx = page_html.find(marker)? + marker.len();
+    let relative_array_idx = page_html.get(marker_idx..)?.find('[')?;
+    let array_idx = marker_idx + relative_array_idx;
+    let raw_array = find_balanced_json_array(page_html, array_idx)?;
+    let parsed: serde_json::Value = serde_json::from_str(raw_array).ok()?;
+    let tracks = parsed.as_array()?;
+
+    let select = |prefer_en: bool, allow_asr: bool| -> Option<String> {
+        tracks.iter().find_map(|track| {
+            let base_url = track.get("baseUrl")?.as_str()?.trim();
+            let language_code = track
+                .get("languageCode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let kind = track
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if prefer_en && !language_code.starts_with("en") {
+                return None;
+            }
+            if !allow_asr && kind == "asr" {
+                return None;
+            }
+            if base_url.is_empty() {
+                return None;
+            }
+            Some(base_url.to_string())
+        })
+    };
+
+    select(true, false)
+        .or_else(|| select(true, true))
+        .or_else(|| select(false, false))
+        .or_else(|| select(false, true))
+}
+
+fn account_roles_are_distinct(bot_username: &str, streamer_login: &str) -> bool {
+    let bot = normalize_login(bot_username);
+    let streamer = normalize_login(streamer_login);
+    bot.is_empty() || streamer.is_empty() || bot != streamer
+}
+
+fn auth_sessions_view(shared: &Arc<crate::state::SharedState>, cfg: &crate::config::AppConfig) -> AuthSessionsView {
+    let bot_username = normalize_login(&cfg.twitch.bot_username);
+    let broadcaster_login = cfg
+        .twitch
+        .broadcaster_login
+        .as_deref()
+        .map(normalize_login)
+        .filter(|v| !v.is_empty());
+
+    let bot_token_present = if !bot_username.is_empty() {
+        shared
+            .secrets
+            .get_twitch_token(&bot_username)
+            .ok()
+            .flatten()
+            .is_some()
+    } else {
+        false
+    };
+
+    let streamer_token_present = if let Some(login) = broadcaster_login.as_ref() {
+        shared
+            .secrets
+            .get_twitch_token(&broadcaster_token_key(login))
+            .ok()
+            .flatten()
+            .is_some()
+    } else {
+        false
+    };
+
+    let visible_broadcaster_login = if streamer_token_present {
+        broadcaster_login.clone()
+    } else {
+        None
+    };
+
+    AuthSessionsView {
+        bot_username,
+        bot_token_present,
+        channel: visible_broadcaster_login.clone().unwrap_or_default(),
+        broadcaster_login: visible_broadcaster_login,
+        streamer_token_present,
+    }
+}
+
+fn service_item_status(
+    configured: bool,
+    available: bool,
+    authenticated: bool,
+    active: bool,
+    auth_optional: bool,
+    active_optional: bool,
+) -> String {
+    if !configured || !available || (!auth_optional && !authenticated) {
+        return "fail".to_string();
+    }
+    if !active_optional && !active {
+        return "warn".to_string();
+    }
+    "pass".to_string()
+}
+
 fn has_streamer_session(
     shared: &std::sync::Arc<crate::state::SharedState>,
     cfg: &crate::config::AppConfig,
@@ -861,6 +1049,13 @@ pub struct AuthSessionsView {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BehaviorSettingsView {
+    pub cohost_mode: bool,
+    pub scheduled_messages_minutes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SttConfigView {
     pub stt_enabled: bool,
     pub stt_binary_path: Option<String>,
@@ -926,21 +1121,118 @@ pub struct SelfTestReport {
     pub checks: Vec<SelfTestCheck>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceHealthItem {
+    pub id: String,
+    pub label: String,
+    pub configured: bool,
+    pub available: bool,
+    pub authenticated: bool,
+    pub active: bool,
+    pub status: String,
+    pub details: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceHealthReport {
+    pub generated_at: String,
+    pub overall: String,
+    pub services: Vec<ServiceHealthItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugBundleResult {
+    pub generated_at: String,
+    pub path: String,
+    pub sections: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YoutubeRemarkRequest {
+    pub context: Value,
+    pub humor_style: String,
+    pub max_remark_length_seconds: u8,
+    pub relevance_strictness: u8,
+    #[serde(default)]
+    pub model_mode: Option<String>,
+    pub repetition_memory: Vec<String>,
+    #[serde(default)]
+    pub topic_history: Option<Vec<String>>,
+    #[serde(default)]
+    pub recent_remarks: Option<Vec<String>>,
+    pub personality_prompt: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YoutubeRemarkResponse {
+    pub should_speak: bool,
+    pub remark: String,
+    pub anchor: String,
+    pub topic: String,
+    pub confidence: f32,
+    pub style: String,
+    pub estimated_duration_seconds: u8,
+    pub skip_reason: Option<String>,
+}
+
+fn extract_json_object(raw: &str) -> Option<String> {
+    let mut depth = 0usize;
+    let mut start = None;
+    for (idx, ch) in raw.char_indices() {
+        if ch == '{' {
+            if start.is_none() {
+                start = Some(idx);
+            }
+            depth += 1;
+        } else if ch == '}' {
+            if depth == 0 {
+                continue;
+            }
+            depth -= 1;
+            if depth == 0 {
+                if let Some(s) = start {
+                    return Some(raw[s..=idx].to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn resolved_providers(state: &AppState) -> (crate::config::ProviderConfig, Vec<crate::config::ProviderConfig>) {
     fn normalize_provider(p: &mut crate::config::ProviderConfig) {
         let model = p.model.trim().to_lowercase();
-        if model.contains("qwen2.5vl") {
-            if p.name.eq_ignore_ascii_case("local-ollama") {
+        let cloud = p.name.eq_ignore_ascii_case("ollama-cloud");
+        if model.contains("qwen2.5vl")
+            || model.contains("mistral-small:24b-instruct")
+            || model.contains("qwen2.5:14b-instruct")
+            || (cloud && (model.contains("llama3.1:8b-instruct") || model.contains("llama3.3:70b-instruct")))
+        {
+            if cloud {
+                p.model = "qwen3:8b".to_string();
+            } else if p.name.eq_ignore_ascii_case("local-ollama") {
                 p.model = "llama3.1:8b-instruct".to_string();
             } else {
-                p.model = "qwen3-coder:480b-cloud".to_string();
+                p.model = "llama3.1:8b-instruct".to_string();
             }
         }
-        if p.name.eq_ignore_ascii_case("ollama-cloud") && p.timeout_ms < 45_000 {
-            p.timeout_ms = 45_000;
+        if p.model.trim().is_empty() {
+            p.model = if cloud {
+                "qwen3:8b".to_string()
+            } else {
+                "llama3.1:8b-instruct".to_string()
+            };
         }
-        if p.name.eq_ignore_ascii_case("local-ollama") && p.timeout_ms < 12_000 {
-            p.timeout_ms = 12_000;
+        if p.name.eq_ignore_ascii_case("ollama-cloud") && p.timeout_ms < 18_000 {
+            p.timeout_ms = 18_000;
+        }
+        if p.name.eq_ignore_ascii_case("local-ollama") && p.timeout_ms < 8_000 {
+            p.timeout_ms = 8_000;
         }
     }
 
@@ -960,146 +1252,9 @@ fn resolved_providers(state: &AppState) -> (crate::config::ProviderConfig, Vec<c
     (primary, fallbacks)
 }
 
-#[tauri::command]
-pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<crate::state::AppStatus, String> {
-    Ok(state.0.get_status())
-}
-
-#[tauri::command]
-pub async fn get_twitch_oauth_settings(
-    state: tauri::State<'_, AppState>,
-) -> Result<TwitchOAuthSettingsView, String> {
-    let cfg = state.0.config.read().clone();
-    Ok(TwitchOAuthSettingsView {
-        client_id: cfg.twitch.client_id,
-        bot_username: cfg.twitch.bot_username,
-        channel: cfg.twitch.channel,
-        broadcaster_login: cfg.twitch.broadcaster_login,
-        redirect_url: cfg.twitch.redirect_url,
-    })
-}
-
-#[tauri::command]
-pub async fn get_auth_sessions(
-    state: tauri::State<'_, AppState>,
-) -> Result<AuthSessionsView, String> {
-    let cfg = state.0.config.read().clone();
-    let bot_username = normalize_login(&cfg.twitch.bot_username);
-    let broadcaster_login = cfg
-        .twitch
-        .broadcaster_login
-        .as_deref()
-        .map(normalize_login)
-        .filter(|v| !v.is_empty());
-
-    let bot_token_present = if !bot_username.is_empty() {
-        state
-            .0
-            .secrets
-            .get_twitch_token(&bot_username)
-            .map_err(|e| e.to_string())?
-            .is_some()
-    } else {
-        false
-    };
-
-    let streamer_token_present = if let Some(login) = broadcaster_login.as_ref() {
-        state
-            .0
-            .secrets
-            .get_twitch_token(&broadcaster_token_key(login))
-            .map_err(|e| e.to_string())?
-            .is_some()
-    } else {
-        false
-    };
-    let visible_broadcaster_login = if streamer_token_present {
-        broadcaster_login.clone()
-    } else {
-        None
-    };
-
-    let visible_channel = visible_broadcaster_login.clone().unwrap_or_default();
-    Ok(AuthSessionsView {
-        bot_username,
-        bot_token_present,
-        channel: visible_channel,
-        broadcaster_login: visible_broadcaster_login,
-        streamer_token_present,
-    })
-}
-
-#[tauri::command]
-pub async fn get_stt_config(state: tauri::State<'_, AppState>) -> Result<SttConfigView, String> {
-    let cfg = state.0.config.read().clone();
-    Ok(SttConfigView {
-        stt_enabled: cfg.voice.stt_enabled,
-        stt_binary_path: cfg.voice.stt_binary_path,
-        stt_model_path: cfg.voice.stt_model_path,
-    })
-}
-
-#[tauri::command]
-pub async fn set_stt_config(
-    state: tauri::State<'_, AppState>,
-    stt_enabled: bool,
-    stt_binary_path: Option<String>,
-    stt_model_path: Option<String>,
-) -> Result<(), String> {
-    let mut cfg = state.0.config.write();
-    cfg.voice.stt_enabled = stt_enabled;
-    cfg.voice.allow_mic_commands = stt_enabled;
-    cfg.voice.stt_binary_path = stt_binary_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
-    cfg.voice.stt_model_path = stt_model_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
-    cfg.save_to_disk().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn get_tts_voice(state: tauri::State<'_, AppState>) -> Result<TtsVoiceView, String> {
-    let cfg = state.0.config.read().clone();
-    Ok(TtsVoiceView {
-        enabled: cfg.voice.enabled,
-        voice_name: cfg.voice.voice_name,
-        volume_percent: cfg.voice.volume_percent,
-    })
-}
-
-#[tauri::command]
-pub async fn set_tts_voice(
-    state: tauri::State<'_, AppState>,
-    voice_name: Option<String>,
-) -> Result<(), String> {
-    let mut cfg = state.0.config.write();
-    cfg.voice.voice_name = voice_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
-    cfg.save_to_disk().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn set_tts_volume(
-    state: tauri::State<'_, AppState>,
-    volume_percent: u8,
-) -> Result<(), String> {
-    let mut cfg = state.0.config.write();
-    cfg.voice.volume_percent = Some(volume_percent.min(100));
-    cfg.save_to_disk().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn verify_voice_runtime(
-    app_handle: AppHandle,
-    state: tauri::State<'_, AppState>,
+async fn build_voice_runtime_report(
+    app_handle: &AppHandle,
+    state: &AppState,
 ) -> Result<VoiceRuntimeReport, String> {
     let cfg = state.0.config.read().voice.clone();
     let mut checks: Vec<VoiceRuntimeCheck> = Vec::new();
@@ -1126,7 +1281,7 @@ pub async fn verify_voice_runtime(
         let resolved_bin = if can_execute_binary(&requested_bin) {
             Some(requested_bin)
         } else {
-            detect_fast_whisper_binary(Some(&app_handle))
+            detect_fast_whisper_binary(Some(app_handle))
         };
         match resolved_bin.as_ref() {
             Some(bin) => push("STT binary", "pass", format!("Using STT binary: {bin}")),
@@ -1141,7 +1296,7 @@ pub async fn verify_voice_runtime(
         let resolved_model = if !requested_model.trim().is_empty() && PathBuf::from(&requested_model).is_file() {
             Some(requested_model)
         } else {
-            detect_fast_whisper_model(Some(&app_handle))
+            detect_fast_whisper_model(Some(app_handle))
         };
         match resolved_model.as_ref() {
             Some(model) => push("STT model", "pass", format!("Using STT model: {model}")),
@@ -1249,6 +1404,386 @@ pub async fn verify_voice_runtime(
         tts_ready,
         checks,
     })
+}
+
+fn sanitized_config_value(cfg: &crate::config::AppConfig) -> Value {
+    let mut safe = serde_json::to_value(cfg).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(twitch) = safe.get_mut("twitch").and_then(|v| v.as_object_mut()) {
+        twitch.insert("client_secret".to_string(), Value::Null);
+        twitch.insert("bot_token".to_string(), Value::Null);
+    }
+    if let Some(primary) = safe
+        .get_mut("providers")
+        .and_then(|v| v.get_mut("primary"))
+        .and_then(|v| v.as_object_mut())
+    {
+        primary.insert("api_key".to_string(), Value::Null);
+    }
+    if let Some(fallbacks) = safe
+        .get_mut("providers")
+        .and_then(|v| v.get_mut("fallbacks"))
+        .and_then(|v| v.as_array_mut())
+    {
+        for item in fallbacks {
+            if let Some(obj) = item.as_object_mut() {
+                obj.insert("api_key".to_string(), Value::Null);
+            }
+        }
+    }
+    if let Some(search) = safe.get_mut("search").and_then(|v| v.as_object_mut()) {
+        search.insert("api_key".to_string(), Value::Null);
+    }
+    safe
+}
+
+async fn build_service_health_report(
+    app_handle: &AppHandle,
+    state: &AppState,
+) -> Result<ServiceHealthReport, String> {
+    let shared = state.0.clone();
+    let cfg = shared.config.read().clone();
+    let auth = auth_sessions_view(&shared, &cfg);
+    let diagnostics = shared.diagnostics.read().clone();
+    let (primary, _) = resolved_providers(state);
+    let provider_available = shared.llm.healthcheck(&primary).await;
+
+    let stt_requested_bin = cfg.voice.stt_binary_path.clone().unwrap_or_default();
+    let stt_bin_available = if stt_requested_bin.trim().is_empty() {
+        detect_fast_whisper_binary(Some(app_handle)).is_some()
+    } else {
+        can_execute_binary(&stt_requested_bin)
+    };
+    let stt_requested_model = cfg.voice.stt_model_path.clone().unwrap_or_default();
+    let stt_model_available = if stt_requested_model.trim().is_empty() {
+        detect_fast_whisper_model(Some(app_handle)).is_some()
+    } else {
+        PathBuf::from(&stt_requested_model).is_file()
+    };
+    let tts_available = edge_tts_candidates().into_iter().any(|bin| can_execute_binary(&bin));
+
+    let mut services = Vec::new();
+    let push_item = |services: &mut Vec<ServiceHealthItem>,
+                     id: &str,
+                     label: &str,
+                     configured: bool,
+                     available: bool,
+                     authenticated: bool,
+                     active: bool,
+                     auth_optional: bool,
+                     active_optional: bool,
+                     details: Vec<String>| {
+        services.push(ServiceHealthItem {
+            id: id.to_string(),
+            label: label.to_string(),
+            configured,
+            available,
+            authenticated,
+            active,
+            status: service_item_status(
+                configured,
+                available,
+                authenticated,
+                active,
+                auth_optional,
+                active_optional,
+            ),
+            details,
+        });
+    };
+
+    push_item(
+        &mut services,
+        "twitch_oauth",
+        "Twitch OAuth",
+        !cfg.twitch.client_id.trim().is_empty(),
+        true,
+        auth.bot_token_present || auth.streamer_token_present,
+        auth.bot_token_present || auth.streamer_token_present,
+        false,
+        true,
+        vec![
+            format!("Client ID configured: {}", !cfg.twitch.client_id.trim().is_empty()),
+            format!("Redirect URL: {}", cfg.twitch.redirect_url),
+        ],
+    );
+    push_item(
+        &mut services,
+        "bot_account",
+        "Bot Account",
+        !auth.bot_username.trim().is_empty(),
+        auth.bot_token_present,
+        auth.bot_token_present,
+        auth.bot_token_present,
+        false,
+        true,
+        vec![
+            format!("Bot username: {}", if auth.bot_username.is_empty() { "<unset>" } else { &auth.bot_username }),
+            format!("Distinct from streamer: {}", account_roles_are_distinct(&auth.bot_username, auth.broadcaster_login.as_deref().unwrap_or_default())),
+        ],
+    );
+    push_item(
+        &mut services,
+        "streamer_account",
+        "Streamer Account",
+        auth.broadcaster_login.as_ref().is_some_and(|v| !v.trim().is_empty()),
+        auth.streamer_token_present,
+        auth.streamer_token_present,
+        auth.streamer_token_present,
+        false,
+        true,
+        vec![
+            format!(
+                "Broadcaster login: {}",
+                auth.broadcaster_login.as_deref().unwrap_or("<unset>")
+            ),
+            format!(
+                "Distinct from bot: {}",
+                account_roles_are_distinct(&auth.bot_username, auth.broadcaster_login.as_deref().unwrap_or_default())
+            ),
+        ],
+    );
+    push_item(
+        &mut services,
+        "irc_chat",
+        "Twitch IRC Chat",
+        auth.bot_token_present && auth.streamer_token_present,
+        shared.twitch.is_connected() || matches!(diagnostics.twitch_state, ConnectionState::Connecting),
+        auth.bot_token_present,
+        shared.twitch.is_connected(),
+        false,
+        false,
+        vec![
+            format!("Runtime state: {:?}", diagnostics.twitch_state),
+            format!("Target channel: {}", cfg.twitch.channel),
+        ],
+    );
+    push_item(
+        &mut services,
+        "eventsub",
+        "EventSub",
+        cfg.twitch.use_eventsub,
+        cfg.twitch.use_eventsub,
+        auth.streamer_token_present,
+        shared.eventsub.is_running(),
+        false,
+        true,
+        vec![format!("EventSub enabled: {}", cfg.twitch.use_eventsub)],
+    );
+    push_item(
+        &mut services,
+        "llm_provider",
+        "Primary LLM Provider",
+        !primary.name.trim().is_empty() && !primary.model.trim().is_empty() && !primary.base_url.trim().is_empty(),
+        provider_available,
+        primary.name.eq_ignore_ascii_case("local-ollama") || primary.api_key.as_ref().is_some_and(|k| !k.trim().is_empty()),
+        matches!(diagnostics.provider_state, ConnectionState::Connected),
+        primary.name.eq_ignore_ascii_case("local-ollama"),
+        true,
+        vec![
+            format!("Provider: {}", primary.name),
+            format!("Model: {}", primary.model),
+            format!("Base URL: {}", primary.base_url),
+        ],
+    );
+    push_item(
+        &mut services,
+        "web_search",
+        "Web Search",
+        cfg.search.enabled,
+        cfg.search.enabled,
+        cfg.search.api_key.as_ref().is_some_and(|k| !k.trim().is_empty()) || cfg.search.provider.eq_ignore_ascii_case("duckduckgo"),
+        cfg.search.enabled,
+        cfg.search.provider.eq_ignore_ascii_case("duckduckgo"),
+        true,
+        vec![
+            format!("Provider: {}", cfg.search.provider),
+            format!("Enabled: {}", cfg.search.enabled),
+        ],
+    );
+    push_item(
+        &mut services,
+        "stt",
+        "Speech To Text",
+        cfg.voice.stt_enabled && cfg.voice.stt_binary_path.as_ref().is_some_and(|v| !v.trim().is_empty()) && cfg.voice.stt_model_path.as_ref().is_some_and(|v| !v.trim().is_empty()),
+        stt_bin_available && stt_model_available,
+        true,
+        cfg.voice.stt_enabled,
+        true,
+        true,
+        vec![
+            format!("Binary available: {}", stt_bin_available),
+            format!("Model available: {}", stt_model_available),
+        ],
+    );
+    push_item(
+        &mut services,
+        "tts",
+        "Text To Speech",
+        cfg.voice.enabled,
+        tts_available,
+        true,
+        cfg.voice.enabled,
+        true,
+        true,
+        vec![
+            format!("Configured voice: {}", cfg.voice.voice_name.clone().unwrap_or_else(|| "auto".to_string())),
+            format!("edge-tts available: {}", tts_available),
+        ],
+    );
+    push_item(
+        &mut services,
+        "youtube_cohost",
+        "YouTube Co-Host",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        vec![
+            "Embedded player and scheduling module compiled.".to_string(),
+            "Transcript/provider flow depends on runtime URL and caption availability.".to_string(),
+        ],
+    );
+
+    let overall = if services.iter().any(|s| s.status == "fail") {
+        "fail"
+    } else if services.iter().any(|s| s.status == "warn") {
+        "warn"
+    } else {
+        "pass"
+    };
+
+    Ok(ServiceHealthReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        overall: overall.to_string(),
+        services,
+    })
+}
+
+#[tauri::command]
+pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<crate::state::AppStatus, String> {
+    Ok(state.0.get_status())
+}
+
+#[tauri::command]
+pub async fn get_twitch_oauth_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<TwitchOAuthSettingsView, String> {
+    let cfg = state.0.config.read().clone();
+    Ok(TwitchOAuthSettingsView {
+        client_id: cfg.twitch.client_id,
+        bot_username: cfg.twitch.bot_username,
+        channel: cfg.twitch.channel,
+        broadcaster_login: cfg.twitch.broadcaster_login,
+        redirect_url: cfg.twitch.redirect_url,
+    })
+}
+
+#[tauri::command]
+pub async fn get_auth_sessions(
+    state: tauri::State<'_, AppState>,
+) -> Result<AuthSessionsView, String> {
+    let cfg = state.0.config.read().clone();
+    Ok(auth_sessions_view(&state.0, &cfg))
+}
+
+#[tauri::command]
+pub async fn get_behavior_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<BehaviorSettingsView, String> {
+    let cfg = state.0.config.read().clone();
+    Ok(BehaviorSettingsView {
+        cohost_mode: cfg.behavior.cohost_mode,
+        scheduled_messages_minutes: cfg.behavior.scheduled_messages_minutes,
+    })
+}
+
+#[tauri::command]
+pub async fn set_behavior_settings(
+    state: tauri::State<'_, AppState>,
+    cohost_mode: bool,
+    scheduled_messages_minutes: Option<u64>,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.behavior.cohost_mode = cohost_mode;
+    cfg.behavior.scheduled_messages_minutes = scheduled_messages_minutes.filter(|v| *v > 0);
+    cfg.save_to_disk().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_stt_config(state: tauri::State<'_, AppState>) -> Result<SttConfigView, String> {
+    let cfg = state.0.config.read().clone();
+    Ok(SttConfigView {
+        stt_enabled: cfg.voice.stt_enabled,
+        stt_binary_path: cfg.voice.stt_binary_path,
+        stt_model_path: cfg.voice.stt_model_path,
+    })
+}
+
+#[tauri::command]
+pub async fn set_stt_config(
+    state: tauri::State<'_, AppState>,
+    stt_enabled: bool,
+    stt_binary_path: Option<String>,
+    stt_model_path: Option<String>,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.voice.stt_enabled = stt_enabled;
+    cfg.voice.allow_mic_commands = stt_enabled;
+    cfg.voice.stt_binary_path = stt_binary_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    cfg.voice.stt_model_path = stt_model_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    cfg.save_to_disk().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_tts_voice(state: tauri::State<'_, AppState>) -> Result<TtsVoiceView, String> {
+    let cfg = state.0.config.read().clone();
+    Ok(TtsVoiceView {
+        enabled: cfg.voice.enabled,
+        voice_name: cfg.voice.voice_name,
+        volume_percent: cfg.voice.volume_percent,
+    })
+}
+
+#[tauri::command]
+pub async fn set_tts_voice(
+    state: tauri::State<'_, AppState>,
+    voice_name: Option<String>,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.voice.voice_name = voice_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    cfg.save_to_disk().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_tts_volume(
+    state: tauri::State<'_, AppState>,
+    volume_percent: u8,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.voice.volume_percent = Some(volume_percent.min(100));
+    cfg.save_to_disk().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn verify_voice_runtime(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<VoiceRuntimeReport, String> {
+    build_voice_runtime_report(&app_handle, &state).await
 }
 
 fn avatar_store_paths(app_handle: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
@@ -1505,7 +2040,18 @@ pub async fn synthesize_tts_cloud(
 }
 
 #[tauri::command]
-pub async fn run_self_test(state: tauri::State<'_, AppState>) -> Result<SelfTestReport, String> {
+pub async fn get_service_health(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<ServiceHealthReport, String> {
+    build_service_health_report(&app_handle, &state).await
+}
+
+#[tauri::command]
+pub async fn run_self_test(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<SelfTestReport, String> {
     let shared = state.0.clone();
     let cfg = shared.config.read().clone();
     let mut checks: Vec<SelfTestCheck> = Vec::new();
@@ -1629,6 +2175,20 @@ pub async fn run_self_test(state: tauri::State<'_, AppState>) -> Result<SelfTest
         },
     );
 
+    let distinct_roles = account_roles_are_distinct(
+        &cfg.twitch.bot_username,
+        cfg.twitch.broadcaster_login.as_deref().unwrap_or(&cfg.twitch.channel),
+    );
+    push(
+        "Account role separation",
+        if distinct_roles { "pass" } else { "fail" },
+        if distinct_roles {
+            "Bot and streamer accounts are distinct.".to_string()
+        } else {
+            "Bot and streamer accounts currently resolve to the same login.".to_string()
+        },
+    );
+
     let mut primary = cfg.providers.primary.clone();
     if primary.api_key.is_none() {
         primary.api_key = shared.secrets.get_provider_key(&primary.name).ok().flatten();
@@ -1664,6 +2224,24 @@ pub async fn run_self_test(state: tauri::State<'_, AppState>) -> Result<SelfTest
         );
     }
 
+    let service_health = build_service_health_report(&app_handle, &state).await?;
+    for svc in service_health.services {
+        push(
+            &format!("Service: {}", svc.label),
+            &svc.status,
+            svc.details.join(" | "),
+        );
+    }
+
+    let voice_report = build_voice_runtime_report(&app_handle, &state).await?;
+    for check in voice_report.checks {
+        push(
+            &format!("Voice: {}", check.name),
+            &check.status,
+            check.details,
+        );
+    }
+
     let overall = if has_fail {
         "fail"
     } else if has_warn {
@@ -1676,6 +2254,58 @@ pub async fn run_self_test(state: tauri::State<'_, AppState>) -> Result<SelfTest
         generated_at: chrono::Utc::now().to_rfc3339(),
         overall: overall.to_string(),
         checks,
+    })
+}
+
+#[tauri::command]
+pub async fn export_debug_bundle(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<DebugBundleResult, String> {
+    let generated_at = chrono::Utc::now().to_rfc3339();
+    let shared = state.0.clone();
+    let cfg = shared.config.read().clone();
+    let diagnostics = shared.diagnostics.read().clone();
+    let app_status = shared.get_status();
+    let auth_sessions = auth_sessions_view(&shared, &cfg);
+    let service_health = build_service_health_report(&app_handle, &state).await?;
+    let voice_report = build_voice_runtime_report(&app_handle, &state).await?;
+    let self_test = run_self_test(app_handle.clone(), state).await?;
+    let memory = shared.memory.recent(25).unwrap_or_default();
+    let recent_chat = shared.recent_chat.read().iter().cloned().collect::<Vec<_>>();
+
+    let mut payload = BTreeMap::<String, Value>::new();
+    payload.insert("generatedAt".to_string(), Value::String(generated_at.clone()));
+    payload.insert("config".to_string(), sanitized_config_value(&cfg));
+    payload.insert("diagnostics".to_string(), serde_json::to_value(diagnostics).map_err(|e| e.to_string())?);
+    payload.insert("appStatus".to_string(), serde_json::to_value(app_status).map_err(|e| e.to_string())?);
+    payload.insert("authSessions".to_string(), serde_json::to_value(auth_sessions).map_err(|e| e.to_string())?);
+    payload.insert("serviceHealth".to_string(), serde_json::to_value(service_health).map_err(|e| e.to_string())?);
+    payload.insert("voiceRuntime".to_string(), serde_json::to_value(voice_report).map_err(|e| e.to_string())?);
+    payload.insert("selfTest".to_string(), serde_json::to_value(self_test).map_err(|e| e.to_string())?);
+    payload.insert("recentChat".to_string(), serde_json::to_value(recent_chat).map_err(|e| e.to_string())?);
+    payload.insert("memory".to_string(), serde_json::to_value(memory).map_err(|e| e.to_string())?);
+
+    let bundle_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("debug-bundles");
+    std::fs::create_dir_all(&bundle_dir).map_err(|e| e.to_string())?;
+    let file_path = bundle_dir.join(format!(
+        "cohost-debug-{}.json",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+    ));
+    std::fs::write(
+        &file_path,
+        serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(DebugBundleResult {
+        generated_at,
+        path: file_path.to_string_lossy().to_string(),
+        sections: payload.keys().cloned().collect(),
     })
 }
 
@@ -2254,6 +2884,16 @@ async fn connect_twitch_chat_internal(
 
     app::update_twitch_state(&shared, ConnectionState::Connected);
     let _ = app_handle.emit("status_updated", shared.get_status());
+    let _ = app_handle.emit(
+        "bot_response",
+        ChatMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            user: shared.config.read().twitch.bot_username.clone(),
+            content: short_connect_joke(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            is_bot: true,
+        },
+    );
     emit_oauth_profile_updated(
         app_handle,
         normalize_login(&shared.config.read().twitch.bot_username),
@@ -2341,6 +2981,160 @@ pub async fn get_provider_api_key(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Deserialize)]
+struct ProviderTagsResponse {
+    models: Vec<ProviderTagModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderTagModel {
+    name: String,
+}
+
+#[tauri::command]
+pub async fn get_provider_models(
+    state: tauri::State<'_, AppState>,
+    provider_name: String,
+) -> Result<Vec<String>, String> {
+    let provider_name = provider_name.trim().to_string();
+    if provider_name.is_empty() {
+        return Err("provider_name is required".to_string());
+    }
+
+    let cfg = state.0.config.read().clone();
+    let mut provider = if cfg.providers.primary.name.eq_ignore_ascii_case(&provider_name) {
+        cfg.providers.primary
+    } else if let Some(found) = cfg
+        .providers
+        .fallbacks
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(&provider_name))
+        .cloned()
+    {
+        found
+    } else if provider_name.eq_ignore_ascii_case("ollama-cloud") {
+        crate::config::ProviderConfig {
+            name: "ollama-cloud".to_string(),
+            base_url: "https://ollama.com".to_string(),
+            model: "qwen3:8b".to_string(),
+            api_key: None,
+            timeout_ms: 18_000,
+            enabled: true,
+        }
+    } else {
+        return Err(format!("provider {} not found in config", provider_name));
+    };
+
+    if provider.api_key.is_none() {
+        provider.api_key = state.0.secrets.get_provider_key(&provider.name).ok().flatten();
+    }
+
+    let url = format!("{}/api/tags", provider.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let mut req = client.get(url);
+    if let Some(key) = provider.api_key {
+        req = req.bearer_auth(key);
+    }
+
+    let response = timeout(Duration::from_millis(provider.timeout_ms), req.send())
+        .await
+        .map_err(|_| "provider request timed out".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| "<empty>".to_string());
+        return Err(format!("provider {} returned {}: {}", provider.name, status, body));
+    }
+
+    let payload: ProviderTagsResponse = response.json().await.map_err(|e| e.to_string())?;
+    let mut models = payload
+        .models
+        .into_iter()
+        .map(|m| m.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn fetch_youtube_timedtext(video_id: String) -> Result<String, String> {
+    let video_id = video_id.trim();
+    if video_id.is_empty() {
+        return Err("video_id is required".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("greyok-cohost/0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let track_list_url = format!(
+        "https://video.google.com/timedtext?type=list&v={}",
+        url::form_urlencoded::byte_serialize(video_id.as_bytes()).collect::<String>()
+    );
+    let track_list_response = client
+        .get(&track_list_url)
+        .send()
+        .await
+        .map_err(|e| format!("timedtext track request failed: {e}"))?;
+    if !track_list_response.status().is_success() {
+        return Err(format!(
+            "timedtext track request failed with {}",
+            track_list_response.status()
+        ));
+    }
+    let track_list_xml = track_list_response.text().await.map_err(|e| e.to_string())?;
+    let caption_url = if let Some((lang, name)) = select_youtube_caption_track(&track_list_xml) {
+        let mut url = format!(
+            "https://video.google.com/timedtext?v={}&lang={}&fmt=srv3",
+            url::form_urlencoded::byte_serialize(video_id.as_bytes()).collect::<String>(),
+            url::form_urlencoded::byte_serialize(lang.as_bytes()).collect::<String>()
+        );
+        if !name.is_empty() {
+            url.push_str("&name=");
+            url.push_str(&url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>());
+        }
+        url
+    } else {
+        let watch_url = format!(
+            "https://www.youtube.com/watch?v={}",
+            url::form_urlencoded::byte_serialize(video_id.as_bytes()).collect::<String>()
+        );
+        let watch_response = client
+            .get(&watch_url)
+            .send()
+            .await
+            .map_err(|e| format!("watch page caption fallback failed: {e}"))?;
+        if !watch_response.status().is_success() {
+            return Err("no published caption tracks were found for this video".to_string());
+        }
+        let watch_html = watch_response.text().await.map_err(|e| e.to_string())?;
+        let Some(mut url) = extract_watch_caption_url(&watch_html) else {
+            return Err("no published caption tracks were found for this video".to_string());
+        };
+        if !url.contains("fmt=") {
+            url.push_str(if url.contains('?') { "&fmt=srv3" } else { "?fmt=srv3" });
+        }
+        url
+    };
+
+    let caption_response = client
+        .get(&caption_url)
+        .send()
+        .await
+        .map_err(|e| format!("caption request failed: {e}"))?;
+    if !caption_response.status().is_success() {
+        return Err(format!(
+            "caption request failed with {}",
+            caption_response.status()
+        ));
+    }
+    caption_response.text().await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn configure_cloud_only_mode(
     state: tauri::State<'_, AppState>,
@@ -2349,13 +3143,26 @@ pub async fn configure_cloud_only_mode(
     if model.trim().is_empty() {
         return Err("model is required".to_string());
     }
+    let model_norm = {
+        let m = model.trim().to_lowercase();
+        if m.contains("qwen2.5vl")
+            || m.contains("mistral-small:24b-instruct")
+            || m.contains("qwen2.5:14b-instruct")
+            || m.contains("llama3.1:8b-instruct")
+            || m.contains("llama3.3:70b-instruct")
+        {
+            "qwen3:8b".to_string()
+        } else {
+            model.trim().to_string()
+        }
+    };
     {
         let mut cfg = state.0.config.write();
         cfg.providers.primary.name = "ollama-cloud".to_string();
         cfg.providers.primary.base_url = "https://ollama.com".to_string();
-        cfg.providers.primary.model = model.trim().to_string();
+        cfg.providers.primary.model = model_norm;
         cfg.providers.primary.enabled = true;
-        cfg.providers.primary.timeout_ms = 60000;
+        cfg.providers.primary.timeout_ms = 18_000;
         cfg.providers.primary.api_key = None;
         let has_local_fallback = cfg
             .providers
@@ -2368,7 +3175,7 @@ pub async fn configure_cloud_only_mode(
                 base_url: "http://127.0.0.1:11434".to_string(),
                 model: "llama3.1:8b-instruct".to_string(),
                 api_key: None,
-                timeout_ms: 12000,
+                timeout_ms: 8000,
                 enabled: true,
             });
         } else {
@@ -2471,6 +3278,225 @@ async fn summarize_chat_unlocked(state: Arc<crate::state::SharedState>) -> Resul
 }
 
 #[tauri::command]
+pub async fn generate_youtube_remark(
+    state: tauri::State<'_, AppState>,
+    input: YoutubeRemarkRequest,
+) -> Result<YoutubeRemarkResponse, String> {
+    let previous_excerpt = input
+        .context
+        .get("previousSegments")
+        .and_then(|v| v.as_array())
+        .map(|segments| {
+            segments
+                .iter()
+                .rev()
+                .take(5)
+                .filter_map(|segment| segment.get("text").and_then(|v| v.as_str()))
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default();
+    let next_excerpt = input
+        .context
+        .get("nextSegments")
+        .and_then(|v| v.as_array())
+        .map(|segments| {
+            segments
+                .iter()
+                .take(4)
+                .filter_map(|segment| segment.get("text").and_then(|v| v.as_str()))
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        })
+        .unwrap_or_default();
+    let entities = input
+        .context
+        .get("entities")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|value| value.as_str())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let tone = input
+        .context
+        .get("tone")
+        .and_then(|v| v.as_str())
+        .unwrap_or("neutral")
+        .trim()
+        .to_string();
+    let topic = input
+        .context
+        .get("topicSummary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown topic")
+        .trim()
+        .to_string();
+    let current_segment = input
+        .context
+        .get("currentSegment")
+        .and_then(|v| v.get("text"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let seriousness = input
+        .context
+        .get("seriousnessScore")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32;
+    let humor_opportunity = input
+        .context
+        .get("humorOpportunityScore")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32;
+    let pause_confidence = input
+        .context
+        .get("pauseConfidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as f32;
+
+    if seriousness >= 0.74 {
+        return Ok(YoutubeRemarkResponse {
+            should_speak: false,
+            remark: String::new(),
+            anchor: current_segment.clone(),
+            topic,
+            confidence: 0.0,
+            style: input.humor_style,
+            estimated_duration_seconds: 3,
+            skip_reason: Some("sensitive segment".to_string()),
+        });
+    }
+
+    let max_len = input.max_remark_length_seconds.clamp(4, 12);
+    let strictness = input.relevance_strictness.clamp(0, 100);
+    let repetition = if input.repetition_memory.is_empty() {
+        "none".to_string()
+    } else {
+        input.repetition_memory.iter().take(8).cloned().collect::<Vec<_>>().join(" | ")
+    };
+    let topic_history = input
+        .topic_history
+        .iter()
+        .flat_map(|items| items.iter().take(8))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let recent_remarks = input
+        .recent_remarks
+        .iter()
+        .flat_map(|items| items.iter().take(8))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let personality = input
+        .personality_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Be funny, sharp, and deeply grounded in context. Prefer relevance and freshness over speed.");
+
+    let system_prompt = "You are a live YouTube co-host.
+Return JSON only with keys:
+shouldSpeak,remark,anchor,topic,confidence,style,estimatedDurationSeconds,skipReason
+Rules:
+- Stay anchored to transcript/context evidence.
+- Keep remark short and conversational.
+- Prioritize context and comedic insight over raw speed.
+- Avoid repeated joke structures, repeated targets, and repeated phrasing.
+- Mention or clearly imply the current segment topic, claim, behavior, wording, or tone.
+- If evidence is weak, shouldSpeak=false with skipReason.
+- Do not output markdown, explanation, or extra keys.";
+
+    let user_prompt = format!(
+        "style: {}\nmaxRemarkLengthSeconds: {}\nrelevanceStrictness: {}\npersonality: {}\n\
+         topicSummary: {}\ncurrentSegment: {}\npreviousTranscript: {}\nnextTranscript: {}\nentities: {}\ntone: {}\n\
+         seriousnessScore: {:.3}\nhumorOpportunityScore: {:.3}\npauseConfidence: {:.3}\n\
+         recentTopicHistory: {}\nrecentRemarksToAvoid: {}\nrepetitionMemory: {}\n\
+         contextJson: {}\n\
+         Generate one remark JSON object now. If you cannot clearly anchor the joke to the transcript, return shouldSpeak=false.",
+        input.humor_style,
+        max_len,
+        strictness,
+        personality,
+        topic,
+        current_segment,
+        previous_excerpt,
+        next_excerpt,
+        entities,
+        tone,
+        seriousness,
+        humor_opportunity,
+        pause_confidence,
+        topic_history,
+        recent_remarks,
+        repetition,
+        input.context
+    );
+
+    let requested_mode = input
+        .model_mode
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("medium")
+        .to_lowercase();
+    let (mut primary, fallbacks) = resolved_providers(&state);
+    if primary.name.eq_ignore_ascii_case("ollama-cloud") {
+        primary.model = match requested_mode.as_str() {
+            "fast" => "qwen3:8b".to_string(),
+            "long_context" => "phi4:14b".to_string(),
+            _ => "gemma3:12b".to_string(),
+        };
+    }
+    let raw = map_err(
+        state
+            .0
+            .llm
+            .generate(&primary, &fallbacks, system_prompt, &user_prompt)
+            .await,
+    )?;
+
+    let parsed = extract_json_object(&raw)
+        .and_then(|json| serde_json::from_str::<YoutubeRemarkResponse>(&json).ok());
+
+    if let Some(mut resp) = parsed {
+        resp.style = if resp.style.trim().is_empty() {
+            input.humor_style
+        } else {
+            resp.style
+        };
+        if resp.estimated_duration_seconds == 0 {
+            resp.estimated_duration_seconds = max_len.min(6);
+        }
+        if resp.remark.trim().is_empty() && resp.should_speak {
+            resp.should_speak = false;
+            resp.skip_reason = Some("empty remark".to_string());
+        }
+        return Ok(resp);
+    }
+
+    Ok(YoutubeRemarkResponse {
+        should_speak: false,
+        remark: String::new(),
+        anchor: current_segment,
+        topic,
+        confidence: 0.0,
+        style: input.humor_style,
+        estimated_duration_seconds: max_len.min(6),
+        skip_reason: Some("model output was not valid JSON".to_string()),
+    })
+}
+
+#[tauri::command]
 pub async fn get_personality_profile(state: tauri::State<'_, AppState>) -> Result<PersonalityProfile, String> {
     Ok(state.0.personality.read().clone())
 }
@@ -2507,8 +3533,8 @@ pub async fn transcribe_local_audio(
     base64_audio: String,
     mime_type: String,
 ) -> Result<String, String> {
-    let _permit = acquire_stt_permit(&state.0).await?;
     let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
+    let _permit = acquire_stt_permit(&state.0).await?;
     map_err(stt::transcribe_base64_audio(&cfg, &base64_audio, &mime_type).await)
 }
 
@@ -2518,9 +3544,9 @@ pub async fn transcribe_mic_chunk(
     state: tauri::State<'_, AppState>,
     duration_ms: u64,
 ) -> Result<String, String> {
-    let _permit = acquire_stt_permit(&state.0).await?;
     let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     let audio_b64 = map_err(native_mic::capture_wav_base64(duration_ms).await)?;
+    let _permit = acquire_stt_permit(&state.0).await?;
     map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)
 }
 
@@ -2616,4 +3642,87 @@ pub async fn submit_streamer_prompt(
             .await
             .map_err(|e| AppError::Internal(e.to_string())),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        account_roles_are_distinct, can_execute_binary, extract_watch_caption_url,
+        sanitized_config_value, service_item_status,
+    };
+    use crate::config::AppConfig;
+
+    #[test]
+    fn detects_account_role_collisions() {
+        assert!(!account_roles_are_distinct("GreyOK__", "greyok__"));
+        assert!(account_roles_are_distinct("bot_account", "streamer_account"));
+        assert!(account_roles_are_distinct("", "streamer_account"));
+    }
+
+    #[test]
+    fn service_status_distinguishes_fail_warn_and_pass() {
+        assert_eq!(
+            service_item_status(false, true, true, true, false, false),
+            "fail"
+        );
+        assert_eq!(
+            service_item_status(true, true, true, false, false, false),
+            "warn"
+        );
+        assert_eq!(
+            service_item_status(true, true, true, true, false, false),
+            "pass"
+        );
+    }
+
+    #[test]
+    fn config_redaction_removes_sensitive_fields() {
+        let mut cfg = AppConfig::default();
+        cfg.twitch.client_secret = Some("secret".to_string());
+        cfg.twitch.bot_token = Some("oauth:test".to_string());
+        cfg.providers.primary.api_key = Some("provider".to_string());
+        cfg.search.api_key = Some("search".to_string());
+        let safe = sanitized_config_value(&cfg);
+
+        assert!(safe["twitch"]["client_secret"].is_null());
+        assert!(safe["twitch"]["bot_token"].is_null());
+        assert!(safe["providers"]["primary"]["api_key"].is_null());
+        assert!(safe["search"]["api_key"].is_null());
+    }
+
+    #[test]
+    fn executable_detection_requires_real_executable_bits() {
+        use std::io::Write;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fake-bin");
+        let mut file = std::fs::File::create(&path).expect("create file");
+        writeln!(file, "#!/bin/sh\necho ok").expect("write file");
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).expect("chmod");
+        }
+        assert!(can_execute_binary(path.to_string_lossy().as_ref()));
+        assert!(!can_execute_binary(""));
+    }
+
+    #[test]
+    fn watch_page_caption_fallback_prefers_english_tracks() {
+        let html = r#"
+            <html><body>
+            "captionTracks":[
+              {"baseUrl":"https://www.youtube.com/api/timedtext?v=abc123\u0026lang=es","languageCode":"es","kind":""},
+              {"baseUrl":"https://www.youtube.com/api/timedtext?v=abc123\u0026lang=en","languageCode":"en","kind":"asr"}
+            ]
+            </body></html>
+        "#;
+
+        let url = extract_watch_caption_url(html).expect("expected caption track");
+        assert!(url.contains("lang=en"));
+        assert!(url.contains("timedtext"));
+    }
 }

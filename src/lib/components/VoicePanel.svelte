@@ -4,12 +4,11 @@
   import Icon from './ui/Icon.svelte';
   import UiSelect from './ui/UiSelect.svelte';
   import UiSlider from './ui/UiSlider.svelte';
-  import UiSwitch from './ui/UiSwitch.svelte';
+  import DiagnosticsPanel from './DiagnosticsPanel.svelte';
   import {
     autoConfigureSttFast,
     getSttConfig,
     getTtsVoice,
-    setSttConfig,
     setTtsVoice,
     setTtsVolume,
     setVoiceEnabled,
@@ -25,12 +24,9 @@
   let sttReady = false;
   let ttsReady = false;
   let sttEnabled = false;
-  let sttBinaryPath = '';
-  let sttModelPath = '';
   let sttStatus = '';
   let lastResult = '';
   let verifying = false;
-  let sttAutoConfiguring = false;
   let runtimeReport: VoiceRuntimeReport | null = null;
 
   $: activationBlockedReason = !aiReady
@@ -52,6 +48,7 @@
   onMount(() => {
     void (async () => {
       await loadSettings();
+      await ensureSttDefaults();
       await runRuntimeVerification();
     })();
   });
@@ -67,8 +64,6 @@
     try {
       const stt = await getSttConfig();
       sttEnabled = !!stt.sttEnabled;
-      sttBinaryPath = stt.sttBinaryPath || '';
-      sttModelPath = stt.sttModelPath || '';
       sttReady = !!(stt.sttEnabled && stt.sttBinaryPath && stt.sttModelPath);
       sttStatus = sttReady ? 'STT configured.' : 'STT needs enable + binary + model.';
     } catch {
@@ -110,40 +105,22 @@
     }
   }
 
-  async function saveSttSettings() {
-    try {
-      await setSttConfig(
-        sttEnabled,
-        sttBinaryPath.trim() || null,
-        sttModelPath.trim() || null
-      );
-      sttStatus = 'Saved STT settings.';
-      await runRuntimeVerification();
-    } catch (error) {
-      errorBannerStore.set('Saving STT settings failed: ' + String(error));
-    }
-  }
-
-  async function autoSetupStt() {
-    sttAutoConfiguring = true;
+  async function ensureSttDefaults() {
+    if (sttReady) return;
     try {
       const result = await autoConfigureSttFast();
       sttEnabled = result.sttEnabled;
-      sttBinaryPath = result.sttBinaryPath || '';
-      sttModelPath = result.sttModelPath || '';
       sttStatus = result.message || 'Auto-configure completed.';
-      await runRuntimeVerification();
     } catch (error) {
+      sttStatus = 'STT auto-configure failed. Restart app and retry.';
       errorBannerStore.set('STT auto-configure failed: ' + String(error));
-    } finally {
-      sttAutoConfiguring = false;
     }
   }
 </script>
 
 <section class="card grid">
-  <h3>Voice</h3>
-  <small class="muted">Cloud neural TTS output + local STT status. Mic toggle is in Main Session Chat.</small>
+  <h3>Settings</h3>
+  <small class="muted">Voice output lives here. STT is auto-configured behind the scenes and no manual tuning is required.</small>
   {#if activationBlocked}
     <small class="muted">{activationBlockedReason}</small>
   {/if}
@@ -163,26 +140,9 @@
       <Icon name="check" />{verifying ? 'Verifying...' : 'Verify STT/TTS'}
     </Button.Root>
   </div>
-
-  <div class="stt-grid">
-    <div class="toggle">
-      <UiSwitch bind:checked={sttEnabled} ariaLabel="Enable STT" />
-      <span>Enable STT</span>
-    </div>
-    <label class="muted" for="stt-bin">STT binary path</label>
-    <input id="stt-bin" bind:value={sttBinaryPath} placeholder="whisper-cli or full path" />
-    <label class="muted" for="stt-model">STT model path</label>
-    <input id="stt-model" bind:value={sttModelPath} placeholder="/path/to/ggml-*.bin" />
-    <div class="stt-actions">
-      <Button.Root class="p-btn btn" on:click={saveSttSettings}><Icon name="save" />Save STT</Button.Root>
-      <Button.Root class="p-btn btn" on:click={autoSetupStt} disabled={sttAutoConfiguring}>
-        <Icon name="wrench" />{sttAutoConfiguring ? 'Auto-configuring...' : 'Auto-configure STT'}
-      </Button.Root>
-    </div>
-    {#if sttStatus}
-      <small class="muted">{sttStatus}</small>
-    {/if}
-  </div>
+  {#if sttStatus}
+    <small class="muted">{sttStatus}</small>
+  {/if}
 
   <small class="muted state">
     <span class="light {sttReady ? 'on' : 'off'}" aria-hidden="true"></span>
@@ -201,4 +161,9 @@
     </div>
   {/if}
   {#if lastResult}<small>{lastResult}</small>{/if}
+
+  <details class="settings-diagnostics">
+    <summary>Diagnostics, Self-Test, and Debug Export</summary>
+    <DiagnosticsPanel embedded={true} />
+  </details>
 </section>

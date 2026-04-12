@@ -2,195 +2,266 @@
   <img src="https://raw.githubusercontent.com/greyok00/codex-twitch-cohost/main/public/top-logo.png" alt="GreyOK logo" width="920" />
 </p>
 
-# GreyOK Twitch Co-Host
+<h1 align="center">GreyOK Twitch Co-Host</h1>
 
-Desktop Twitch co-host app built with **Tauri + Rust backend + Svelte frontend**.
-
-It handles:
-- dual-account Twitch auth (Bot + Streamer),
-- IRC chat connection + EventSub events,
-- conversational AI replies with personality presets,
-- local STT + cloud/browser TTS,
-- avatar popup lip-sync overlay for OBS.
+<p align="center">
+  Desktop Twitch co-host built with Tauri, Rust, and Svelte.
+</p>
 
 ## Downloads
 
-- Main releases page: https://github.com/greyok00/codex-twitch-cohost/releases
-- Current packaged assets include:
-  - Linux: `greyok-cohost-<version>-linux-x64.AppImage`
-  - Windows: `greyok-cohost-<version>-windows-x64.exe` (portable, non-setup)
-  - macOS: `greyok-cohost-<version>-macos.dmg`
+- Releases: https://github.com/greyok00/codex-twitch-cohost/releases
+- Linux: `greyok-cohost-<version>-linux-x64.AppImage`
+- Windows: `greyok-cohost-<version>-windows-x64.exe`
+- macOS: `greyok-cohost-<version>-macos.dmg`
 
-## UI Preview
+## What This App Does
 
-### Main Workspace
-![Main Workspace](docs/screenshots/01-main-session.png)
+GreyOK Twitch Co-Host is a desktop app for running a conversational AI co-host during a stream.
 
-### Auth & Channel
-![Auth & Channel](docs/screenshots/02-auth-channel.png)
+It can:
+- connect separate Twitch `Bot` and `Streamer` accounts
+- join chat and monitor stream activity
+- listen locally with STT
+- speak back with TTS
+- keep a local co-host chat log in the app
+- run a floating avatar window for OBS-style overlays
+- run a YouTube co-host mode that watches a video, tracks transcript context, and makes short remarks
+- verify core services with built-in diagnostics and self-tests
 
-### AI Setup
-![AI Setup](docs/screenshots/03-ai-setup.png)
+## Screenshots
 
-### Voice Input
-![Voice Input](docs/screenshots/04-voice-input.png)
+### Main Session
 
-### Diagnostics
-![Diagnostics](docs/screenshots/05-diagnostics.png)
+![Main session](docs/screenshots/01-main-session.png)
 
-### Memory
-![Memory](docs/screenshots/06-memory.png)
+### Auth And Channel
+
+![Auth and channel](docs/screenshots/02-auth-channel.png)
+
+### Cloud AI Setup
+
+![Cloud AI setup](docs/screenshots/03-cloud-ai.png)
+
+### Settings And Diagnostics
+
+![Settings and diagnostics](docs/screenshots/04-settings.png)
 
 ### About
-![About](docs/screenshots/07-about.png)
 
-### Walkthrough Video
-- `docs/media/walkthrough.webm`
+![About](docs/screenshots/05-about.png)
 
-## Requirements
+## Quick Start
 
-- Node.js 20+
-- npm 10+
-- Rust stable
-- Linux (dev/build): Tauri system deps  
-  (WebKitGTK, GTK3, librsvg, appindicator, ssl, etc.)
+### 1. Install and run
 
-Tauri prerequisites: https://tauri.app/start/prerequisites/
+Linux:
 
-## Quick Start (Developer)
+```bash
+chmod +x greyok-cohost-<version>-linux-x64.AppImage
+./greyok-cohost-<version>-linux-x64.AppImage
+```
+
+Or run from source:
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-## First-Run Setup (End User)
+### 2. Set up Twitch
 
-1. Open **Auth & Channel** tab.
-2. Enter Twitch Client ID (one-time) and save.
-3. Click `1) Connect Bot`.
-4. Click `2) Connect Streamer`.
-5. Click `3) Connect Chat`.
-6. Open **AI Setup**:
-   - set provider key,
-   - choose model/personality,
-   - optionally upload avatar.
-7. Open **Voice Input**:
-   - click `Auto-configure STT`,
-   - verify STT/TTS,
-   - apply TTS voice + volume.
-8. Use **Main Session Chat Control**:
-   - mic button for live transcription,
-   - send local prompts to AI (not posted to Twitch).
+Open `Auth & Channel`.
 
-## Core Usage Flow
+Fill in:
+- Twitch Client ID
+- Bot username
+- Streamer login
 
-### Auth + Chat
-- Bot account is used for IRC send/read.
-- Streamer account is used for EventSub/API checks.
-- App blocks chat connect until both sessions exist.
-- Account-role mismatch is actively rejected.
+Then do the login flow in this order:
+1. Connect Bot
+2. Connect Streamer
+3. Connect Chat
 
-### Conversational AI
-- Local prompts from app feed AI directly.
-- Twitch chat inputs can trigger responses by cadence/keyword/mention.
-- LLM failures now emit a local fallback reply instead of silent failure.
+Important:
+- Bot and Streamer must be different Twitch accounts.
+- The channel should follow the Streamer account.
 
-### Voice
-- STT uses `whisper-cli` + local `.bin` model.
-- Auto-configure detects/provisions binary + model where possible.
-- TTS uses cloud synthesis first, then browser synthesis fallback.
+### 3. Set up the AI model
 
-### Avatar Popup (OBS Layer)
-- Upload transparent PNG avatar.
-- Mouth + brow alignment persisted.
-- Popup supports hide/show controls and transparent background.
+Open `Cloud AI`.
 
-## Commands (Chat/Voice)
+Do this:
+1. Open `Ollama`
+2. Create an account if needed
+3. Create an API key
+4. Paste the key into the app
+5. Click `Check Cloud Models`
+6. Pick a model
+7. Click `Enable Cloud-Only Mode`
 
-Chat command prefix: `_` (aliases `!`, `.`, `/` also work).
+Recommended presets:
+- `qwen3:8b` for faster conversation
+- `gemma3:12b` for better context and humor
+- `phi4:14b` for longer-context behavior
 
-- `_help`, `_commands`, `_menu`
-- `_search <query>`
-- `_say <text>`
-- `_model <name>`
-- `_lurk on`
-- `_lurk off`
-- `_todo add <minutes> <content>`
-- `_todo every <minutes> <content>`
-- `_todo list`
-- `_todo done <id>`
-- `_todo run <id>`
-- `_agent ...` (alias for `_todo ...`)
+### 4. Set up voice
 
-Voice command phrases currently supported:
+Open `Settings`.
 
-- `search for <query>`
-- `open <url>`
-- `reply to chat <text>`
-- `switch to model <name>`
-- `toggle lurk mode`
-- `toggle tts` / `read that aloud`
-- `summarize the last minute`
+The app will try to auto-configure STT on startup.
 
-## Config + Data Locations
+Then:
+1. Choose a TTS voice
+2. Set the volume
+3. Click `Apply Voice`
+4. Click `Verify STT/TTS`
 
-- Runtime config: user config dir (`~/.config/twitch-cohost-bot/config.json` on Linux)
-- Secrets: OS keyring + local secure fallback (`secrets.json` in config dir)
-- Personality profile: user config dir (`personality.json`)
-- Avatar data: app data dir under `avatar/avatar.json`
-- Memory DB: app data dir under `memory_db`
+If verification is green, the voice pipeline is ready.
 
-## Build / Package
+## How To Use It
+
+## Main Chat
+
+The top chat area is the local co-host console.
+
+Use it to:
+- speak to the AI with the mic button
+- send a local typed message to the AI
+- watch status chips for Bot, Streamer, Chat, AI, STT, and Mic
+- control how often the co-host makes autonomous comments
+- switch between reply modes
+
+Reply modes:
+- `Fast conversational`: quickest responses
+- `Medium`: better balance
+- `Long context`: slower but more contextual
+
+`Ambient chatter` controls whether the AI only responds when prompted or also comments on its own.
+
+## YouTube Co-Host Mode
+
+The YouTube panel sits directly under the chat.
+
+Paste a YouTube URL and click `Load`.
+
+The app will:
+- load the video through the YouTube IFrame Player API
+- fetch transcript context when available
+- score whether there is enough context to interrupt
+- pause at a natural break
+- generate a short context-relevant remark
+- speak the remark
+- resume playback
+
+Supported transcript sources:
+- provider captions
+- uploaded transcript or subtitle file
+- metadata fallback when captions are missing
+
+## Avatar
+
+Open `Avatar` from the Control Center.
+
+You can:
+- upload a head image
+- open the floating avatar window
+- adjust mouth and eyebrow rig placement
+- use the avatar as an OBS overlay layer
+
+## Settings And Diagnostics
+
+Diagnostics are tucked inside `Settings`.
+
+Available tools:
+- `Verify STT/TTS`
+- `Refresh Health`
+- `Run Self-Test`
+- `Export Debug Bundle`
+
+The health view separates:
+- configured
+- available
+- authenticated
+- active
+
+That makes it much easier to tell whether something is merely unset, missing on disk, not logged in, or actually failing live.
+
+## Simple Troubleshooting
+
+### The AI is not replying
+
+Check:
+1. `Cloud AI` has a valid Ollama key
+2. a real model is selected
+3. `AI` status is online
+4. `Chat` is connected if you expect Twitch replies
+
+### The mic is not hearing you
+
+Open `Settings` and run `Verify STT/TTS`.
+
+If STT is not ready:
+- restart the app once
+- let auto-configure run
+- verify the bundled whisper runtime exists
+
+### The bot connects with the wrong Twitch account
+
+Clear sessions, then reconnect in the correct order:
+1. Bot
+2. Streamer
+3. Chat
+
+The bot and streamer accounts must stay separate.
+
+### YouTube mode is not making comments
+
+Check:
+1. the video has captions, or upload a transcript file
+2. `Ambient chatter` is enabled
+3. `Video pace` is above zero
+4. the selected model is valid
+
+## Social Links
+
+- GitHub: https://github.com/greyok00
+- Twitch: https://twitch.tv/greyok__
+- YouTube: https://www.youtube.com/@GreyOK_0
+- Discord: https://discord.gg/TJcr6ZxJ
+
+## Development
+
+```bash
+npm install
+npm run lint
+npm run test:harness
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run build
+```
+
+Run the app:
+
+```bash
+npm run tauri dev
+```
+
+## Packaging
+
+Local build:
 
 ```bash
 npm run build
 npm run tauri build
 ```
 
-Linux AppImage output is under:
-- `src-tauri/target/release/bundle/appimage/`
-
-## Release Pipeline (All OS)
-
-GitHub Actions workflow:
-- `.github/workflows/release.yml`
-- matrix builds for:
-  - `ubuntu-22.04` (AppImage),
-  - `windows-latest` (portable EXE),
-  - `macos-latest` (DMG).
-
-Tag release flow:
-
-```bash
-git tag -a vX.Y.Z -m "vX.Y.Z"
-git push origin vX.Y.Z
-```
-
-The workflow publishes draft release assets with normalized names:
-- `greyok-cohost-<tag>-linux-x64.AppImage`
-- `greyok-cohost-<tag>-windows-x64.exe`
-- `greyok-cohost-<tag>-macos.dmg`
-
-## Troubleshooting
-
-- `OAuth is not configured...`: set Twitch Client ID first.
-- `Bot login required`: connect Bot account.
-- `Streamer login required`: connect Streamer account.
-- `invalid OAuth token`: clear/reconnect affected account session.
-- `STT runtime is missing`: run Voice -> Auto-configure STT.
-- `LLM generation failed`: check provider key/model; fallback message should still appear locally.
-- `search is disabled`: use command path that enables conversational search or enable search in config.
-
-## Dev Validation
-
-```bash
-npm run check
-cargo check --manifest-path src-tauri/Cargo.toml
-npm run smoke:dev
-```
+Cross-platform releases are built by GitHub Actions on tag push:
+- Ubuntu builds the AppImage
+- Windows builds the portable EXE
+- macOS builds the DMG
 
 ## Notes
 
-- Windows and macOS builds are produced in CI and should be treated as pre-release/untested until validated on target machines.
-- Linux AppImage is the primary tested packaging target.
+- The app is optimized around a live conversational co-host flow, not a command-heavy bot UI.
+- Web search support exists in the codebase, but it is not the primary workflow yet.
+- The release page is the source of truth for packaged builds.

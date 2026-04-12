@@ -22,6 +22,29 @@ export interface DiagnosticsState {
   uptimeSeconds: number;
 }
 
+export interface ServiceHealthItem {
+  id: string;
+  label: string;
+  configured: boolean;
+  available: boolean;
+  authenticated: boolean;
+  active: boolean;
+  status: 'pass' | 'warn' | 'fail' | string;
+  details: string[];
+}
+
+export interface ServiceHealthReport {
+  generatedAt: string;
+  overall: 'pass' | 'warn' | 'fail' | string;
+  services: ServiceHealthItem[];
+}
+
+export interface DebugBundleResult {
+  generatedAt: string;
+  path: string;
+  sections: string[];
+}
+
 export interface AppStatus {
   channel?: string;
   model: string;
@@ -106,4 +129,9 @@ export interface VoiceRuntimeReport {
 export interface AvatarImage {
   dataUrl: string;
   fileName?: string | null;
+}
+
+export interface BehaviorSettings {
+  cohostMode: boolean;
+  scheduledMessagesMinutes?: number | null;
 }

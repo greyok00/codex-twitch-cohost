@@ -129,15 +129,15 @@ impl Default for AppConfig {
                     base_url: "http://127.0.0.1:11434".to_string(),
                     model: "llama3.1:8b-instruct".to_string(),
                     api_key: None,
-                    timeout_ms: 6000,
+                    timeout_ms: 8000,
                     enabled: true,
                 },
                 fallbacks: vec![ProviderConfig {
                     name: "ollama-cloud".to_string(),
                     base_url: "https://ollama.com".to_string(),
-                    model: "llama3.1:8b-instruct".to_string(),
+                    model: "qwen3:8b".to_string(),
                     api_key: None,
-                    timeout_ms: 10000,
+                    timeout_ms: 18000,
                     enabled: false,
                 }],
             },
@@ -304,21 +304,8 @@ impl AppConfig {
     }
 
     pub fn save_to_disk(&self) -> AppResult<()> {
-        // Never persist secrets to config.json; keep them in keychain only.
-        let mut safe = self.clone();
-        safe.twitch.client_secret = None;
-        safe.twitch.bot_token = None;
-        safe.providers.primary.api_key = None;
-        for fallback in &mut safe.providers.fallbacks {
-            fallback.api_key = None;
-        }
-        safe.search.api_key = None;
-        safe.normalize_runtime_paths();
-        let rendered = serde_json::to_string_pretty(&safe)?;
         let target = Self::write_target_path();
-        Self::ensure_parent_dir(&target)?;
-        fs::write(&target, rendered)
-            .map_err(|e| AppError::Config(format!("failed writing {}: {e}", target.display())))
+        self.save_to_path(&target)
     }
 
     pub fn validate(&self) -> AppResult<()> {
@@ -338,5 +325,68 @@ impl AppConfig {
             ));
         }
         Ok(())
+    }
+
+    pub fn sanitized_for_disk(&self) -> Self {
+        let mut safe = self.clone();
+        safe.twitch.client_secret = None;
+        safe.twitch.bot_token = None;
+        safe.providers.primary.api_key = None;
+        for fallback in &mut safe.providers.fallbacks {
+            fallback.api_key = None;
+        }
+        safe.search.api_key = None;
+        safe.normalize_runtime_paths();
+        safe
+    }
+
+    pub fn save_to_path(&self, path: &Path) -> AppResult<()> {
+        let rendered = serde_json::to_string_pretty(&self.sanitized_for_disk())?;
+        Self::ensure_parent_dir(path)?;
+        fs::write(path, rendered)
+            .map_err(|e| AppError::Config(format!("failed writing {}: {e}", path.display())))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn load_from_path(path: &Path) -> AppResult<Self> {
+        let raw = fs::read_to_string(path)
+            .map_err(|e| AppError::Config(format!("failed reading {}: {e}", path.display())))?;
+        let mut cfg: Self = serde_json::from_str(&raw)
+            .map_err(|e| AppError::Config(format!("invalid JSON in {}: {e}", path.display())))?;
+        cfg.normalize_runtime_paths();
+        cfg.validate()?;
+        Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+
+    #[test]
+    fn save_to_path_redacts_secrets_and_roundtrips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+
+        let mut cfg = AppConfig::default();
+        cfg.twitch.client_id = "client-id".to_string();
+        cfg.twitch.client_secret = Some("secret".to_string());
+        cfg.twitch.bot_token = Some("oauth:token".to_string());
+        cfg.providers.primary.api_key = Some("provider-key".to_string());
+        cfg.search.api_key = Some("search-key".to_string());
+
+        cfg.save_to_path(&path).expect("save config");
+        let raw = std::fs::read_to_string(&path).expect("read config");
+        assert!(raw.contains("\"client_id\": \"client-id\""));
+        assert!(raw.contains("\"client_secret\": null"));
+        assert!(raw.contains("\"bot_token\": null"));
+        assert!(raw.contains("\"api_key\": null"));
+
+        let loaded = AppConfig::load_from_path(&path).expect("load config");
+        assert_eq!(loaded.twitch.client_id, "client-id");
+        assert!(loaded.twitch.client_secret.is_none());
+        assert!(loaded.twitch.bot_token.is_none());
+        assert!(loaded.providers.primary.api_key.is_none());
+        assert!(loaded.search.api_key.is_none());
     }
 }

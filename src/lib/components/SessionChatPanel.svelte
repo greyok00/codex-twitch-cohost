@@ -1,11 +1,15 @@
 <script lang="ts">
   import { Button } from 'bits-ui';
-  import { onDestroy, onMount } from 'svelte';
+  import { afterUpdate, onDestroy, onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import Icon from './ui/Icon.svelte';
-  import { autoConfigureSttFast, getSttConfig, setVoiceEnabled, submitStreamerPrompt, transcribeMicChunk } from '../api/tauri';
+  import UiSelect from './ui/UiSelect.svelte';
+  import UiSlider from './ui/UiSlider.svelte';
+  import { autoConfigureSttFast, getBehaviorSettings, getSttConfig, loadStatus, setBehaviorSettings, setModel, setVoiceEnabled, submitStreamerPrompt, transcribeMicChunk } from '../api/tauri';
   import { authSessionsStore, botLogStore, chatStore, diagnosticsStore, errorBannerStore, eventStore, statusStore } from '../stores/app';
+  import { cohostControlsStore, type CohostModelMode } from '../stores/cohost';
 
   let content = '';
   let sttReady = false;
@@ -14,11 +18,29 @@
   let micProcessing = false;
   let micLoopId = 0;
   let micStatus = 'Mic idle.';
-  let micChunkMs = 3600;
+  let micChunkMs = 1000;
   let lastMicTextNormalized = '';
   let lastMicTextAt = 0;
   let sttStatusNote = 'STT not initialized.';
   let sttFixing = false;
+  let lastAppliedModelMode: CohostModelMode | null = null;
+  let selectedModelMode: CohostModelMode = 'medium';
+  let videoRemarksPerMinute = 1.2;
+  let autonomousReplies = true;
+  let controlsReady = false;
+  let feedEl: HTMLDivElement | null = null;
+
+  const modelModeOptions = [
+    { value: 'fast', label: 'Fast conversational' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'long_context', label: 'Long context' }
+  ];
+
+  function modelForMode(mode: CohostModelMode): string {
+    if (mode === 'fast') return 'qwen3:8b';
+    if (mode === 'long_context') return 'phi4:14b';
+    return 'gemma3:12b';
+  }
 
   $: combined = [
     ...$chatStore.map((m) => ({ ...m, source: 'viewer' as const })),
@@ -31,11 +53,25 @@
       source: 'system' as const
     }))
   ]
-    .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
-    .slice(0, 300);
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+    .slice(-300);
+
+  afterUpdate(() => {
+    if (!feedEl) return;
+    requestAnimationFrame(() => {
+      if (!feedEl) return;
+      feedEl.scrollTop = feedEl.scrollHeight;
+    });
+  });
 
   onMount(() => {
+    const initialControls = get(cohostControlsStore);
+    selectedModelMode = initialControls.modelMode;
+    videoRemarksPerMinute = initialControls.videoRemarksPerMinute;
+    autonomousReplies = initialControls.autonomousReplies;
+    controlsReady = true;
     void refreshSttReady();
+    void hydrateBehaviorSettings();
     sttTimer = window.setInterval(() => void refreshSttReady(), 3500);
   });
 
@@ -58,6 +94,24 @@
     } catch {
       sttReady = false;
       sttStatusNote = 'STT status unavailable.';
+    }
+  }
+
+  async function hydrateBehaviorSettings() {
+    try {
+      const behavior = await getBehaviorSettings();
+      cohostControlsStore.update((current) => {
+        const next = {
+          ...current,
+          autonomousReplies: behavior.cohostMode
+        };
+        selectedModelMode = next.modelMode;
+        videoRemarksPerMinute = next.videoRemarksPerMinute;
+        autonomousReplies = next.autonomousReplies;
+        return next;
+      });
+    } catch {
+      // no-op
     }
   }
 
@@ -88,6 +142,41 @@
       errorBannerStore.set('Local AI send failed: ' + String(error));
     }
   }
+
+  async function applyModelMode(mode: CohostModelMode) {
+    if (mode === lastAppliedModelMode) return;
+    lastAppliedModelMode = mode;
+    try {
+      await setModel(modelForMode(mode));
+      await loadStatus();
+    } catch (error) {
+      errorBannerStore.set('Model mode switch failed: ' + String(error));
+    }
+  }
+
+  async function toggleAutonomousReplies(enabled: boolean) {
+    try {
+      await setBehaviorSettings(enabled, enabled ? 15 : null);
+    } catch (error) {
+      errorBannerStore.set('Autonomous chatter update failed: ' + String(error));
+    }
+  }
+
+  function handleAutonomousToggle(event: Event) {
+    const next = (event.currentTarget as HTMLInputElement).checked;
+    autonomousReplies = next;
+    void toggleAutonomousReplies(next);
+  }
+
+  $: if (controlsReady) {
+    cohostControlsStore.set({
+      modelMode: selectedModelMode,
+      videoRemarksPerMinute,
+      autonomousReplies
+    });
+  }
+
+  $: void applyModelMode(selectedModelMode);
 
   $: activationBlockedReason = !$diagnosticsStore.providerState || $diagnosticsStore.providerState !== 'connected'
     ? 'Connect AI first, then connect chat.'
@@ -240,7 +329,7 @@
   }
 </script>
 
-<section class="card grid">
+<section class="card grid session-chat-panel">
   <div class="head">
     <h3>Main Session Chat Control</h3>
     <div class="quick-icons">
@@ -275,19 +364,35 @@
     <span class="chip {sttReady ? 'ok' : 'bad'}">STT {sttReady ? 'ready' : 'missing'}</span>
     <span class="chip {micLive ? 'ok' : 'bad'}">Mic {micLive ? 'live' : 'off'}</span>
   </div>
-  <small class="muted state">
+  <small class="muted session-meta">
     <span class="light {$statusStore.twitchState === 'connected' ? 'on' : 'off'}" aria-hidden="true"></span>
-    State: {$statusStore.twitchState} | Channel: {$statusStore.channel || 'not set'}
+    State: {$statusStore.twitchState} | Channel: {$statusStore.channel || 'not set'} | {micStatus}{sttFixing ? ' Auto-fixing STT…' : ''}
   </small>
 
-  <div class="composer">
-    <input bind:value={content} placeholder="Send local message to AI (not Twitch chat)..." on:keydown={(e) => e.key === 'Enter' && submit()} />
-    <Button.Root class="p-btn btn" on:click={submit}><Icon name="send" />Send to AI</Button.Root>
+  <div class="cohost-controls">
+    <div class="cohost-cell label muted">Reply mode</div>
+    <div class="cohost-cell">
+      <UiSelect bind:value={selectedModelMode} options={modelModeOptions} placeholder="Response mode" />
+    </div>
+    <div class="cohost-cell label muted">Ambient chatter</div>
+    <div class="cohost-cell">
+      <label class="toggle-row cohost-toggle">
+        <input
+          type="checkbox"
+          bind:checked={autonomousReplies}
+          on:change={handleAutonomousToggle}
+        />
+        enabled
+      </label>
+    </div>
+    <div class="cohost-cell label muted">Video pace</div>
+    <div class="cohost-cell slider-wrap">
+      <UiSlider bind:value={videoRemarksPerMinute} min={0} max={4} step={0.1} ariaLabel="Video comment speed" />
+    </div>
+    <div class="cohost-cell value muted">{videoRemarksPerMinute.toFixed(1)}/min</div>
   </div>
 
-  <small class="muted">{micStatus} {sttFixing ? 'Auto-fixing STT…' : ''}</small>
-
-  <div class="feed">
+  <div class="feed" bind:this={feedEl}>
     {#if combined.length === 0}
       <small class="muted">No chat or bot activity yet.</small>
     {:else}
@@ -301,5 +406,10 @@
         </div>
       {/each}
     {/if}
+  </div>
+
+  <div class="composer">
+    <input bind:value={content} placeholder="Send local message to AI (not Twitch chat)..." on:keydown={(e) => e.key === 'Enter' && submit()} />
+    <Button.Root class="p-btn btn" on:click={submit}><Icon name="send" />Send to AI</Button.Root>
   </div>
 </section>

@@ -23,7 +23,9 @@
     | 'trash'
     | 'chevron'
     | 'shield'
-    | 'voice' = 'spark';
+    | 'voice'
+    | 'pause'
+    | 'play' = 'spark';
   export let size = 15;
 </script>
 
@@ -108,5 +110,10 @@
     <path d="M12 3v6" />
     <path d="M8.5 8.5a4.9 4.9 0 0 0 0 7M15.5 8.5a4.9 4.9 0 0 1 0 7" />
     <path d="M5.5 5.5a9 9 0 0 0 0 13M18.5 5.5a9 9 0 0 1 0 13" />
+  {:else if name === 'play'}
+    <path d="M8 5v14l11-7z" />
+  {:else if name === 'pause'}
+    <path d="M8 5h3v14H8z" />
+    <path d="M13 5h3v14h-3z" />
   {/if}
 </svg>
