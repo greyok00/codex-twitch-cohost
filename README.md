@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/top-logo.png" alt="GreyOK logo" width="160" />
+</p>
+
 # GreyOK Twitch Co-Host
 
 Desktop Twitch co-host app built with **Tauri + Rust backend + Svelte frontend**.
