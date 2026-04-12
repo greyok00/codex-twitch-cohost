@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { Button } from 'bits-ui';
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { listen } from '@tauri-apps/api/event';
-  import { clearAuthSessions, connectChat, connectTwitch, disconnectChat, getTwitchOauthSettings, loadAuthSessions, loadStatus, openExternal, openIsolatedTwitchWindow, setTwitchOauthSettings } from '../api/tauri';
-  import { authSessionsStore, errorBannerStore, statusStore } from '../stores/app';
+  import Icon from './ui/Icon.svelte';
+  import { clearAuthSessions, clearBotSession, clearStreamerSession, connectChat, connectTwitch, disconnectChat, getTwitchOauthSettings, loadAuthSessions, loadStatus, openExternal, openIsolatedTwitchWindow, setTwitchOauthSettings } from '../api/tauri';
+  import { authSessionsStore, eventStore, statusStore } from '../stores/app';
 
   let clientId = '';
   let botUsername = '';
@@ -18,19 +20,22 @@
   let oauthCode: { userCode: string; verificationUri: string; verificationUrl: string; role: string } | null = null;
   $: canJoin = $authSessionsStore.botTokenPresent && $authSessionsStore.streamerTokenPresent;
   $: oauthConfigured = Boolean(clientId && clientId.trim() && clientId !== 'your_twitch_client_id' && clientId !== 'replace_client_id');
-  $: nextStep = !$authSessionsStore.botTokenPresent
-    ? 'connect-bot'
-    : !$authSessionsStore.streamerTokenPresent
-      ? 'connect-streamer'
-      : $statusStore.twitchState !== 'connected'
-        ? 'connect-chat'
-        : 'ready';
+
+  function logUiMessage(content: string) {
+    const entry = {
+      id: `ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: 'ui',
+      content,
+      timestamp: new Date().toISOString()
+    };
+    eventStore.update((items) => [entry, ...items].slice(0, 300));
+  }
 
   async function loadSavedOAuthSettings() {
     const saved = await getTwitchOauthSettings();
     clientId = saved.clientId || '';
     botUsername = saved.botUsername || '';
-    channel = saved.channel || '';
+    channel = saved.broadcasterLogin || '';
     redirectUrl = saved.redirectUrl || redirectUrl;
     showAdvanced = !oauthConfigured;
   }
@@ -54,7 +59,7 @@
         broadcasterLogin?: string | null;
       }>('oauth_profile_updated', (event) => {
         botUsername = event.payload.botUsername || botUsername;
-        channel = event.payload.channel || channel;
+        channel = event.payload.broadcasterLogin || event.payload.channel || '';
         oauthCode = null;
       });
       cleanups.push(unlistenProfile);
@@ -86,7 +91,7 @@
       await loadSavedOAuthSettings();
       await loadAuthSessions();
     } catch (error) {
-      errorBannerStore.set('Saving Twitch OAuth settings failed: ' + String(error));
+      logUiMessage('Saving Twitch OAuth settings failed: ' + String(error));
     }
   }
 
@@ -94,7 +99,7 @@
     try {
       await openExternal('https://dev.twitch.tv/console/apps/create');
     } catch (error) {
-      errorBannerStore.set('Failed to open Twitch Developer Console: ' + String(error));
+      logUiMessage('Failed to open Twitch Developer Console: ' + String(error));
     }
   }
 
@@ -103,7 +108,7 @@
       if (!oauthConfigured) {
         showAdvanced = true;
         await openTwitchDevAppSetup();
-        errorBannerStore.set('OAuth setup required first: log in at Twitch Developer Console, create an app, copy Client ID, save it here, then connect bot.');
+        logUiMessage('OAuth setup required first: log in at Twitch Developer Console, create an app, copy Client ID, save it here, then connect bot.');
         return;
       }
       // Reuse saved session by default; backend only opens auth flow when needed.
@@ -114,7 +119,7 @@
         void maybeAutoJoin();
       }, 1200);
     } catch (error) {
-      errorBannerStore.set('OAuth launch failed: ' + String(error));
+      logUiMessage('OAuth launch failed: ' + String(error));
     }
   }
 
@@ -126,7 +131,7 @@
         void loadAuthSessions();
       }, 1200);
     } catch (error) {
-      errorBannerStore.set('OAuth launch failed: ' + String(error));
+      logUiMessage('OAuth launch failed: ' + String(error));
     }
   }
 
@@ -134,11 +139,11 @@
     try {
       if (!oauthConfigured) {
         showAdvanced = true;
-        errorBannerStore.set('Set Twitch client ID first in OAuth Setup.');
+        logUiMessage('Set Twitch client ID first in OAuth Setup.');
         return;
       }
       if (!$authSessionsStore.botTokenPresent) {
-        errorBannerStore.set('Connect Bot first, then switch Streamer account.');
+        logUiMessage('Connect Bot first, then switch Streamer account.');
         return;
       }
       await connectTwitch(true, streamerAuthProfile, 'streamer');
@@ -147,7 +152,7 @@
         void loadAuthSessions();
       }, 1200);
     } catch (error) {
-      errorBannerStore.set('Streamer switch failed: ' + String(error));
+      logUiMessage('Streamer switch failed: ' + String(error));
     }
   }
 
@@ -156,11 +161,11 @@
       if (!oauthConfigured) {
         showAdvanced = true;
         await openTwitchDevAppSetup();
-        errorBannerStore.set('OAuth setup required first: create app in Twitch Developer Console, save Client ID, then connect streamer.');
+        logUiMessage('OAuth setup required first: create app in Twitch Developer Console, save Client ID, then connect streamer.');
         return;
       }
       if (!$authSessionsStore.botTokenPresent) {
-        errorBannerStore.set('Connect Bot first, then connect Streamer.');
+        logUiMessage('Connect Bot first, then connect Streamer.');
         return;
       }
       // Reuse saved streamer session by default.
@@ -171,7 +176,7 @@
         void maybeAutoJoin();
       }, 1200);
     } catch (error) {
-      errorBannerStore.set('Streamer OAuth failed: ' + String(error));
+      logUiMessage('Streamer OAuth failed: ' + String(error));
     }
   }
 
@@ -179,7 +184,7 @@
     try {
       await openIsolatedTwitchWindow(botAuthProfile, 'https://www.twitch.tv/login');
     } catch (error) {
-      errorBannerStore.set('Failed to open Twitch login: ' + String(error));
+      logUiMessage('Failed to open Twitch login: ' + String(error));
     }
   }
 
@@ -192,7 +197,27 @@
       channel = '';
       oauthCode = null;
     } catch (error) {
-      errorBannerStore.set('Reset auth sessions failed: ' + String(error));
+      logUiMessage('Reset auth sessions failed: ' + String(error));
+    }
+  }
+
+  async function onDisconnectBot() {
+    try {
+      await clearBotSession();
+      await loadStatus();
+      await loadSavedOAuthSettings();
+    } catch (error) {
+      logUiMessage('Disconnect bot session failed: ' + String(error));
+    }
+  }
+
+  async function onDisconnectStreamer() {
+    try {
+      await clearStreamerSession();
+      await loadStatus();
+      await loadSavedOAuthSettings();
+    } catch (error) {
+      logUiMessage('Disconnect streamer session failed: ' + String(error));
     }
   }
 
@@ -200,16 +225,16 @@
     try {
       if (!oauthConfigured) {
         showAdvanced = true;
-        errorBannerStore.set('Set Twitch client ID first in OAuth Setup.');
+        logUiMessage('Set Twitch client ID first in OAuth Setup.');
         return;
       }
       if (!canJoin) {
-        errorBannerStore.set('Activation order: Connect Bot -> Connect Streamer -> Connect Chat.');
+        logUiMessage('Activation order: Connect Bot -> Connect Streamer -> Connect Chat.');
         return;
       }
       await connectChat();
     } catch (error) {
-      errorBannerStore.set('Join chat failed: ' + String(error));
+      logUiMessage('Join chat failed: ' + String(error));
     }
   }
 
@@ -217,7 +242,7 @@
     try {
       await disconnectChat();
     } catch (error) {
-      errorBannerStore.set('Leave chat failed: ' + String(error));
+      logUiMessage('Leave chat failed: ' + String(error));
     }
   }
 
@@ -244,20 +269,6 @@
     }
   }
 
-  async function activateNext() {
-    if (nextStep === 'connect-bot') {
-      await onLogin();
-      return;
-    }
-    if (nextStep === 'connect-streamer') {
-      await onConnectStreamer();
-      return;
-    }
-    if (nextStep === 'connect-chat') {
-      await joinNow();
-    }
-  }
-
   $: if (canJoin && $statusStore.twitchState !== 'connected') {
     void maybeAutoJoin();
   }
@@ -265,36 +276,22 @@
 
 <section class="card">
   <h3 class="title-row">
-    🔐 Twitch Login
+    Twitch Login
     <span class="oauth-status">
       <span class="status-dot {oauthConfigured ? 'ok' : 'bad'}"></span>
       {oauthConfigured ? 'OAuth configured' : 'OAuth not configured'}
     </span>
   </h3>
   <p class="muted">Simple flow: Save Twitch Client ID once, then connect Bot, connect Streamer, then connect Chat.</p>
+  <p class="muted">Bot and Streamer must be different Twitch accounts.</p>
 
   {#if !oauthConfigured}
     <div class="oauth-required">
       <small class="muted">One-time setup: Create a Twitch app, copy its Client ID, then save it here. Use redirect URL <code>http://127.0.0.1:37219/callback</code>.</small>
-      <button class="btn" on:click={openTwitchDevAppSetup}>Open Twitch App Setup</button>
+      <Button.Root class="p-btn btn" on:click={openTwitchDevAppSetup}><Icon name="external" />Open Twitch App Setup</Button.Root>
       <input bind:value={clientId} placeholder="Twitch client ID (required)" />
       <input bind:value={redirectUrl} placeholder="Redirect URL" />
-      <button class="btn" on:click={onSave}>Save OAuth Settings</button>
-    </div>
-  {/if}
-
-  {#if nextStep !== 'ready'}
-    <div class="next-step">
-      <small class="muted">Next step:
-        {#if nextStep === 'connect-bot'} Connect Bot{/if}
-        {#if nextStep === 'connect-streamer'} Connect Streamer{/if}
-        {#if nextStep === 'connect-chat'} Connect Chat{/if}
-      </small>
-      <button class="btn" on:click={activateNext}>
-        {#if nextStep === 'connect-bot'}Activate: Bot{/if}
-        {#if nextStep === 'connect-streamer'}Activate: Streamer{/if}
-        {#if nextStep === 'connect-chat'}Activate: Chat{/if}
-      </button>
+      <Button.Root class="p-btn btn" on:click={onSave}><Icon name="save" />Save OAuth Settings</Button.Root>
     </div>
   {/if}
 
@@ -303,9 +300,9 @@
       <small class="muted">Authorize {oauthCode.role === 'streamer' ? 'Streamer' : 'Bot'} account with this code:</small>
       <div class="oauth-code-value">{oauthCode.userCode}</div>
       <div class="actions">
-        <button class="btn" on:click={() => openExternal(oauthCode.verificationUrl)}>Open Twitch Activation Page</button>
-        <button class="btn" on:click={() => navigator.clipboard?.writeText(oauthCode.userCode)}>Copy Code</button>
-        <button class="btn" on:click={() => (oauthCode = null)}>Dismiss</button>
+        <Button.Root class="p-btn btn" on:click={() => oauthCode && openExternal(oauthCode.verificationUrl)}><Icon name="external" />Open Twitch Activation Page</Button.Root>
+        <Button.Root class="p-btn btn" on:click={() => oauthCode && navigator.clipboard?.writeText(oauthCode.userCode)}><Icon name="copy" />Copy Code</Button.Root>
+        <Button.Root class="p-btn btn" on:click={() => (oauthCode = null)}><Icon name="close" />Dismiss</Button.Root>
       </div>
     </div>
   {/if}
@@ -319,106 +316,34 @@
     Streamer: {$authSessionsStore.streamerTokenPresent ? 'connected' : 'not connected'} ({$authSessionsStore.broadcasterLogin || 'not set'})
   </small>
   <div class="actions primary-actions">
-    <button class="btn" on:click={onLogin} disabled={!oauthConfigured}>1) Connect Bot</button>
-    <button class="btn" on:click={onConnectStreamer} disabled={!oauthConfigured || !$authSessionsStore.botTokenPresent}>2) Connect Streamer</button>
-    <button class="btn" on:click={joinNow} disabled={!oauthConfigured || !canJoin || $statusStore.twitchState === 'connected'}>3) Connect Chat</button>
-    <button class="btn" on:click={leaveNow}>Disconnect Chat</button>
+    <Button.Root class="p-btn btn" on:click={onLogin} disabled={!oauthConfigured}><Icon name="bot" />1) Connect Bot</Button.Root>
+    <Button.Root class="p-btn btn" on:click={onConnectStreamer} disabled={!oauthConfigured || !$authSessionsStore.botTokenPresent}><Icon name="user" />2) Connect Streamer</Button.Root>
+    <Button.Root class="p-btn btn" on:click={joinNow} disabled={!oauthConfigured || !canJoin || $statusStore.twitchState === 'connected'}><Icon name="plug" />3) Connect Chat</Button.Root>
+    <Button.Root class="p-btn btn" on:click={leaveNow}><Icon name="unplug" />Disconnect Chat</Button.Root>
   </div>
 
-  <button class="btn tertiary-toggle" on:click={() => (showTools = !showTools)}>
-    {showTools ? 'Hide' : 'Show'} Extra Tools ▾
-  </button>
+  <Button.Root class="p-btn btn tertiary-toggle" on:click={() => (showTools = !showTools)}>
+    <Icon name="wrench" />{showTools ? 'Hide' : 'Show'} Extra Tools <Icon name="chevron" />
+  </Button.Root>
 
   {#if showTools}
     <div class="actions">
-      <button class="btn" on:click={openBotLoginWindow}>🔐 Open Twitch Login Page</button>
-      <button class="btn" on:click={onSwitchBot}>🔄 Switch Bot Account</button>
-      <button class="btn" on:click={onSwitchStreamer}>🔄 Switch Streamer Account</button>
-      <button class="btn" on:click={onResetAuth}>🧼 Reset Auth Sessions</button>
+      <Button.Root class="p-btn btn" on:click={openBotLoginWindow}><Icon name="external" />Open Twitch Login Page</Button.Root>
+      <Button.Root class="p-btn btn" on:click={onSwitchBot}><Icon name="switch" />Switch Bot Account</Button.Root>
+      <Button.Root class="p-btn btn" on:click={onSwitchStreamer}><Icon name="switch" />Switch Streamer Account</Button.Root>
+      <Button.Root class="p-btn btn" on:click={onDisconnectBot}><Icon name="unplug" />Disconnect Bot Account</Button.Root>
+      <Button.Root class="p-btn btn" on:click={onDisconnectStreamer}><Icon name="unplug" />Disconnect Streamer Account</Button.Root>
+      <Button.Root class="p-btn btn" on:click={onResetAuth}><Icon name="reset" />Reset Auth Sessions</Button.Root>
     </div>
   {/if}
 
-  <button class="btn tertiary-toggle" on:click={() => (showAdvanced = !showAdvanced)}>
-    {showAdvanced ? 'Hide' : 'Show'} Advanced OAuth Setup ▾
-  </button>
+  <Button.Root class="p-btn btn tertiary-toggle" on:click={() => (showAdvanced = !showAdvanced)}>
+    <Icon name="key" />{showAdvanced ? 'Hide' : 'Show'} Advanced OAuth Setup <Icon name="chevron" />
+  </Button.Root>
 
   {#if showAdvanced}
     <input bind:value={clientId} placeholder="Twitch client ID" />
     <input bind:value={redirectUrl} placeholder="Redirect URL" />
-    <button class="btn" on:click={onSave}>Save OAuth Settings</button>
+    <Button.Root class="p-btn btn" on:click={onSave}><Icon name="save" />Save OAuth Settings</Button.Root>
   {/if}
 </section>
-
-<style>
-  .actions {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .primary-actions .btn {
-    min-width: 140px;
-  }
-  .tertiary-toggle {
-    justify-content: flex-start;
-    padding-inline: 0.7rem;
-    opacity: 0.95;
-  }
-  .next-step {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    flex-wrap: wrap;
-  }
-  .oauth-required {
-    display: grid;
-    gap: 0.45rem;
-    margin-bottom: 0.75rem;
-    padding: 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--panel), white 3%);
-  }
-  .oauth-code-card {
-    display: grid;
-    gap: 0.45rem;
-    margin-bottom: 0.75rem;
-    padding: 0.65rem;
-    border: 1px solid color-mix(in srgb, var(--line), #22c55e 38%);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--panel), #22c55e 6%);
-  }
-  .oauth-code-value {
-    font-weight: 800;
-    font-size: 1.15rem;
-    letter-spacing: 0.1em;
-    color: var(--text);
-  }
-  .title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.7rem;
-    flex-wrap: wrap;
-  }
-  .oauth-status {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.82rem;
-    color: var(--muted);
-  }
-  .status-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 999px;
-    display: inline-block;
-  }
-  .status-dot.ok {
-    background: #22c55e;
-    box-shadow: 0 0 0.45rem rgba(34, 197, 94, 0.55);
-  }
-  .status-dot.bad {
-    background: #ef4444;
-    box-shadow: 0 0 0.45rem rgba(239, 68, 68, 0.5);
-  }
-</style>

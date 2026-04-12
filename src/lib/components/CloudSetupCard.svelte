@@ -1,16 +1,19 @@
 <script lang="ts">
+  import { Button } from 'bits-ui';
   import { configureCloudOnlyMode, openExternal, setProviderApiKey } from '../api/tauri';
+  import Icon from './ui/Icon.svelte';
+  import UiSelect from './ui/UiSelect.svelte';
   import { errorBannerStore } from '../stores/app';
 
   let apiKey = '';
-  let selectedModel = 'deepseek-v3.1:671b-cloud';
+  let selectedModel = 'llama3.3:70b-instruct';
   let status = '';
 
   const recommended = [
-    { id: 'deepseek-v3.1:671b-cloud', label: 'High quality general', tags: 'natural conversation, long-context', webSearch: 'Yes (via app tools)', vision: 'No' },
-    { id: 'qwen3-coder:480b-cloud', label: 'Latest coding + tools', tags: 'tools, fast reasoning', webSearch: 'Yes (via app tools)', vision: 'No' },
-    { id: 'gpt-oss:120b-cloud', label: 'Open weights assistant', tags: 'agentic, tool-ready', webSearch: 'Yes (via app tools)', vision: 'No' },
-    { id: 'llava:latest', label: 'Vision fallback (if available)', tags: 'multimodal', webSearch: 'Yes (via app tools)', vision: 'Yes (image input)' }
+    { id: 'llama3.3:70b-instruct', label: 'Best overall conversation quality', style: 'Natural, witty, stable', context: 'High', webSearch: 'App search supported' },
+    { id: 'qwen2.5:32b-instruct', label: 'Balanced chat + reasoning', style: 'Fast, coherent, versatile', context: 'High', webSearch: 'App search supported' },
+    { id: 'mistral-small:24b-instruct', label: 'Low-latency banter', style: 'Quick and concise', context: 'Medium', webSearch: 'App search supported' },
+    { id: 'llama3.1:8b-instruct', label: 'Lightweight fallback', style: 'Fast local-friendly fallback', context: 'Medium', webSearch: 'App search supported' }
   ];
 
   async function saveKeyAndCloudMode() {
@@ -25,7 +28,7 @@
     } catch (error) {
       const msg = String(error);
       if (msg.includes('model') && msg.includes('not found')) {
-        status = `Model "${selectedModel}" not found. Choose another preset (recommended: qwen3-coder:480b-cloud).`;
+        status = `Model "${selectedModel}" not found. Try llama3.1:8b-instruct as fallback.`;
       }
       errorBannerStore.set('Cloud setup failed: ' + msg);
     }
@@ -56,62 +59,44 @@
   }
 </script>
 
-<section class="card grid">
-  <h3>☁️ Cloud AI Setup</h3>
-  <small class="muted">You need an Ollama account for cloud models. If you do not have one, create it at ollama.com, then generate a free API key and paste it here.</small>
+<section class="card grid compact-cloud">
+  <h3>Cloud AI Setup</h3>
+  <small class="muted">Focused on conversational cohost models. Use your Ollama account and key.</small>
 
   <div class="actions link-actions">
-    <button class="btn" on:click={openOllama}>1) Open Ollama (create account)</button>
-    <button class="btn" on:click={openKeys}>2) Open API Keys (free key)</button>
-    <button class="btn" on:click={openDocs}>Docs</button>
+    <Button.Root class="p-btn btn" on:click={openOllama}><Icon name="external" />1) Open Ollama (create account)</Button.Root>
+    <Button.Root class="p-btn btn" on:click={openKeys}><Icon name="key" />2) Open API Keys (free key)</Button.Root>
+    <Button.Root class="p-btn btn" on:click={openDocs}><Icon name="book" />Docs</Button.Root>
   </div>
 
   <input type="password" autocomplete="off" bind:value={apiKey} placeholder="Paste Ollama API key" />
 
   <label class="muted" for="cloud-model-preset">Model preset</label>
-  <select id="cloud-model-preset" bind:value={selectedModel}>
-    {#each recommended as model}
-      <option value={model.id}>{model.id} - {model.label} ({model.tags})</option>
-    {/each}
-  </select>
+  <UiSelect
+    bind:value={selectedModel}
+    options={recommended.map((model) => ({ value: model.id, label: `${model.id} - ${model.label}` }))}
+    placeholder="Select cloud model preset"
+  />
 
-  <button class="btn" on:click={saveKeyAndCloudMode}>3) Enable Cloud-Only Mode</button>
+  <Button.Root class="p-btn btn" on:click={saveKeyAndCloudMode}><Icon name="cloud" />3) Enable Cloud-Only Mode</Button.Root>
 
   <div class="cap-grid">
     <div class="cap-head">Model</div>
-    <div class="cap-head">Web Search</div>
-    <div class="cap-head">Vision</div>
+    <div class="cap-head">Best For</div>
+    <div class="cap-head">Style</div>
+    <div class="cap-head">Context</div>
+    <div class="cap-head">Search</div>
     {#each recommended as model}
       <div>{model.id}</div>
+      <div>{model.label}</div>
+      <div>{model.style}</div>
+      <div>{model.context}</div>
       <div>{model.webSearch}</div>
-      <div>{model.vision}</div>
     {/each}
   </div>
 
-  <small class="muted">Web search is app-driven (commands/tools), not auto-browsing by the model itself.</small>
-  <small class="muted">Vision models can analyze images, but desktop screen-capture-to-model is not wired yet.</small>
+  <small class="muted">Search is handled by the app and fed back into conversation context.</small>
   {#if status}
     <small>{status}</small>
   {/if}
 </section>
-
-<style>
-  .actions {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-  .link-actions .btn {
-    min-width: 150px;
-  }
-  .cap-grid {
-    display: grid;
-    grid-template-columns: 1.8fr 1fr 0.8fr;
-    gap: 0.35rem 0.6rem;
-    font-size: 0.85rem;
-  }
-  .cap-head {
-    color: var(--muted);
-    font-weight: 700;
-  }
-</style>

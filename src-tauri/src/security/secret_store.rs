@@ -74,6 +74,14 @@ impl SecretStore {
         Ok(())
     }
 
+    pub fn clear_twitch_session(&self, account: &str) -> AppResult<()> {
+        let token_key = format!("twitch:{account}");
+        let refresh_key = format!("twitch-refresh:{account}");
+        self.delete_secret(&token_key)?;
+        self.delete_secret(&refresh_key)?;
+        Ok(())
+    }
+
     fn set_secret(&self, account: &str, secret: &str) -> AppResult<()> {
         if let Ok(entry) = keyring::Entry::new(SERVICE_NAME, account) {
             let _ = entry.set_password(secret);
@@ -163,6 +171,24 @@ impl SecretStore {
                 }
             }
         }
+        let _ = self.remove_local_secret(account);
         Ok(())
+    }
+
+    fn remove_local_secret(&self, account: &str) -> AppResult<()> {
+        let path = Self::secrets_path();
+        if !path.exists() {
+            return Ok(());
+        }
+        let raw = fs::read_to_string(&path)
+            .map_err(|e| AppError::SecretStore(format!("failed reading {}: {e}", path.display())))?;
+        let mut map: HashMap<String, String> = serde_json::from_str(&raw).unwrap_or_default();
+        if map.remove(account).is_none() {
+            return Ok(());
+        }
+        let rendered = serde_json::to_string_pretty(&map)
+            .map_err(|e| AppError::SecretStore(format!("failed encoding local secrets: {e}")))?;
+        fs::write(&path, rendered)
+            .map_err(|e| AppError::SecretStore(format!("failed writing {}: {e}", path.display())))
     }
 }

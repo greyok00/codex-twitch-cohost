@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { Button } from 'bits-ui';
   import { clearMemory, summarizeChat } from '../api/tauri';
+  import Icon from './ui/Icon.svelte';
   import { errorBannerStore, eventStore } from '../stores/app';
 
   let summary = '';
@@ -23,21 +25,13 @@
 </script>
 
 <section class="card grid">
-  <h3>🧾 Memory</h3>
+  <h3>Memory</h3>
   <div class="row">
-    <button on:click={summarize}>📝 Summarize Chat</button>
-    <button on:click={wipe}>🧹 Reset Memory</button>
+    <Button.Root class="p-btn" on:click={summarize}><Icon name="summary" />Summarize Chat</Button.Root>
+    <Button.Root class="p-btn" on:click={wipe}><Icon name="trash" />Reset Memory</Button.Root>
   </div>
   {#if summary}
     <p>{summary}</p>
   {/if}
   <small class="muted">Event cache: {$eventStore.length}</small>
 </section>
-
-<style>
-  .row {
-    display: flex;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-</style>

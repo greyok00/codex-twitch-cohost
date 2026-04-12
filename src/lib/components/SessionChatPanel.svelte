@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { Button } from 'bits-ui';
   import { onDestroy, onMount } from 'svelte';
   import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { LogicalSize } from '@tauri-apps/api/dpi';
+  import Icon from './ui/Icon.svelte';
   import { autoConfigureSttFast, getSttConfig, setVoiceEnabled, submitStreamerPrompt, transcribeMicChunk } from '../api/tauri';
   import { authSessionsStore, botLogStore, chatStore, diagnosticsStore, errorBannerStore, eventStore, statusStore } from '../stores/app';
 
@@ -12,7 +14,7 @@
   let micProcessing = false;
   let micLoopId = 0;
   let micStatus = 'Mic idle.';
-  let micChunkMs = 2200;
+  let micChunkMs = 3600;
   let lastMicTextNormalized = '';
   let lastMicTextAt = 0;
   let sttStatusNote = 'STT not initialized.';
@@ -121,15 +123,30 @@
     micStatus = 'Mic live.';
 
     let consecutiveErrors = 0;
+    const isNonSpeechCaption = (value: string): boolean => {
+      const t = value.trim().toLowerCase();
+      if (!t) return true;
+      if (/^\(?\s*(dramatic music|music|applause|laughter|laughing|silence|background noise|noise)\s*\)?[.!?]*$/.test(t)) {
+        return true;
+      }
+      if (/^\[[^\]]{1,48}\]$/.test(t)) return true;
+      if (/^\([^)]{1,48}\)$/.test(t)) return true;
+      return false;
+    };
     while (micLive && thisLoop === micLoopId) {
       micProcessing = true;
       try {
         const text = (await transcribeMicChunk(micChunkMs)).trim();
         consecutiveErrors = 0;
         if (text) {
+          if (isNonSpeechCaption(text)) {
+            micStatus = `Ignored non-speech transcript: "${text}"`;
+            await new Promise((resolve) => setTimeout(resolve, 120));
+            continue;
+          }
           const normalized = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
           const now = Date.now();
-          const duplicate = normalized.length > 0 && normalized === lastMicTextNormalized && now - lastMicTextAt < 1800;
+          const duplicate = normalized.length > 0 && normalized === lastMicTextNormalized && now - lastMicTextAt < 2600;
           if (!duplicate) {
             lastMicTextNormalized = normalized;
             lastMicTextAt = now;
@@ -210,7 +227,9 @@
         minWidth: 420,
         minHeight: 520,
         resizable: true,
-        alwaysOnTop: true
+        alwaysOnTop: true,
+        transparent: true,
+        backgroundColor: '#00000000'
       });
       win.once('tauri://error', (e) => {
         errorBannerStore.set(`Failed to open avatar window: ${String((e as { payload?: unknown })?.payload ?? 'unknown error')}`);
@@ -223,29 +242,29 @@
 
 <section class="card grid">
   <div class="head">
-    <h3>💬 Main Session Chat Control</h3>
+    <h3>Main Session Chat Control</h3>
     <div class="quick-icons">
-      <button
-        class="btn avatar-icon {activationBlocked ? 'inactive' : ''}"
+      <Button.Root
+        class="p-btn btn avatar-icon {activationBlocked ? 'inactive' : ''}"
         on:click={openAvatarQuick}
         disabled={activationBlocked}
         title="Toggle avatar popup"
         aria-label="Toggle avatar popup"
       >
-        <span class="glyph">🧍</span>
+        <Icon name="avatar" />
         <span class="label">Avatar</span>
-      </button>
-      <button
-        class="btn mic-icon {micLive ? 'live' : 'off'}"
+      </Button.Root>
+      <Button.Root
+        class="p-btn btn mic-icon {micLive ? 'live' : 'off'}"
         on:click={toggleMicInline}
         disabled={activationBlocked}
         aria-busy={micProcessing}
         title={micLive ? 'Stop mic' : 'Start mic'}
         aria-label={micLive ? 'Stop mic' : 'Start mic'}
       >
-        <span class="glyph">🎤</span>
+        <Icon name="mic" />
         <span class="label">{micLive ? 'Live' : 'Mic'}</span>
-      </button>
+      </Button.Root>
     </div>
   </div>
   <div class="health">
@@ -263,7 +282,7 @@
 
   <div class="composer">
     <input bind:value={content} placeholder="Send local message to AI (not Twitch chat)..." on:keydown={(e) => e.key === 'Enter' && submit()} />
-    <button class="btn" on:click={submit}>🧠 Send to AI</button>
+    <Button.Root class="p-btn btn" on:click={submit}><Icon name="send" />Send to AI</Button.Root>
   </div>
 
   <small class="muted">{micStatus} {sttFixing ? 'Auto-fixing STT…' : ''}</small>
@@ -275,7 +294,7 @@
       {#each combined as line (line.id)}
         <div class="line {line.source}">
           <span class="tag">
-            {line.source === 'bot' ? '🤖 Bot' : line.source === 'system' ? '📣 System' : '👤 Chat'}
+            {line.source === 'bot' ? 'Bot' : line.source === 'system' ? 'System' : 'Chat'}
           </span>
           <strong>{line.user}</strong>
           <span>{line.content}</span>
@@ -284,162 +303,3 @@
     {/if}
   </div>
 </section>
-
-<style>
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.7rem;
-  }
-  .quick-icons {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .actions {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-  }
-  .composer {
-    display: grid;
-    grid-template-columns: 1fr 132px;
-    gap: 0.5rem;
-  }
-  .feed {
-    max-height: 230px;
-    overflow: auto;
-    display: grid;
-    gap: 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.6rem;
-    background: linear-gradient(180deg, var(--panel-strong) 0%, color-mix(in srgb, var(--panel-strong) 86%, #000 14%) 100%);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  }
-  .mic-icon {
-    width: 78px;
-    height: 78px;
-    min-width: 78px;
-    min-height: 78px;
-    padding: 0.25rem 0.2rem;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    border-radius: 16px;
-    border-width: 2px;
-    gap: 0.2rem;
-  }
-  .mic-icon.live {
-    border-color: color-mix(in srgb, var(--ok) 82%, var(--border) 18%) !important;
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--ok) 42%, rgba(62, 75, 91, 0.82) 58%) 0%,
-      color-mix(in srgb, var(--ok) 23%, rgba(36, 45, 58, 0.88) 77%) 100%
-    ) !important;
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--ok) 50%, transparent 50%),
-      0 0 34px color-mix(in srgb, var(--ok) 55%, transparent 45%);
-  }
-  .mic-icon.off {
-    opacity: 1;
-    background: linear-gradient(
-      180deg,
-      rgba(120, 129, 145, 0.9) 0%,
-      rgba(80, 89, 105, 0.92) 100%
-    ) !important;
-    border-color: rgba(206, 214, 230, 0.5) !important;
-  }
-  .avatar-icon {
-    width: 78px;
-    height: 78px;
-    min-width: 78px;
-    min-height: 78px;
-    padding: 0.25rem 0.2rem;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    border-radius: 16px;
-    border-width: 2px;
-    gap: 0.2rem;
-    background: linear-gradient(
-      180deg,
-      rgba(116, 140, 173, 0.9) 0%,
-      rgba(81, 102, 133, 0.92) 100%
-    ) !important;
-    border-color: rgba(202, 220, 242, 0.55) !important;
-  }
-  .avatar-icon.inactive {
-    opacity: 0.55;
-  }
-  .quick-icons .glyph {
-    font-size: 1.95rem;
-    line-height: 1;
-  }
-  .quick-icons .label {
-    font-size: 0.66rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-  .health {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.42rem;
-  }
-  .chip {
-    font-size: 0.92rem;
-    font-weight: 700;
-    padding: 0.26rem 0.6rem;
-    border: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.02);
-  }
-  .chip.ok {
-    border-color: color-mix(in srgb, var(--ok) 68%, var(--border) 32%);
-    background: color-mix(in srgb, var(--ok) 20%, transparent 80%);
-    color: color-mix(in srgb, var(--text) 78%, #d4ffd8 22%);
-  }
-  .chip.bad {
-    border-color: color-mix(in srgb, var(--danger) 62%, var(--border) 38%);
-    background: color-mix(in srgb, var(--danger) 18%, transparent 82%);
-    color: color-mix(in srgb, var(--text) 82%, #ffd4d4 18%);
-  }
-  .line {
-    display: flex;
-    gap: 0.45rem;
-    align-items: baseline;
-    flex-wrap: wrap;
-    font-size: 1.03rem;
-  }
-  .tag {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: var(--muted);
-  }
-  .line.bot {
-    opacity: 0.95;
-  }
-  .line.system {
-    opacity: 0.85;
-  }
-  .state {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.38rem;
-  }
-  .light {
-    width: 1.08rem;
-    height: 1.08rem;
-    border: 1px solid rgba(0, 0, 0, 0.35);
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset;
-  }
-  .light.on {
-    background: #2bd35f;
-  }
-  .light.off {
-    background: #d74646;
-  }
-</style>

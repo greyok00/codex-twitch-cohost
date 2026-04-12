@@ -1,3 +1,4 @@
+import '@fontsource/manrope/index.css';
 import './lib/styles/global.css';
 import App from './App.svelte';
 

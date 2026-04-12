@@ -89,6 +89,20 @@ export interface TtsVoiceSettings {
   volumePercent?: number | null;
 }
 
+export interface VoiceRuntimeCheck {
+  name: string;
+  status: 'pass' | 'warn' | 'fail' | string;
+  details: string;
+}
+
+export interface VoiceRuntimeReport {
+  generatedAt: string;
+  overall: 'pass' | 'warn' | 'fail' | string;
+  sttReady: boolean;
+  ttsReady: boolean;
+  checks: VoiceRuntimeCheck[];
+}
+
 export interface AvatarImage {
   dataUrl: string;
   fileName?: string | null;
