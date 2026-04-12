@@ -1,182 +1,183 @@
-# Twitch Cohost Bot
+# GreyOK Twitch Co-Host
 
-Cloud-first, low-latency Twitch AI co-host desktop app built with **Tauri (Rust backend)** and **Svelte (frontend)**.
+Desktop Twitch co-host app built with **Tauri + Rust backend + Svelte frontend**.
 
-## Download
+It handles:
+- dual-account Twitch auth (Bot + Streamer),
+- IRC chat connection + EventSub events,
+- conversational AI replies with personality presets,
+- local STT + cloud/browser TTS,
+- avatar popup lip-sync overlay for OBS.
 
-- **Releases page (main downloads):** https://github.com/greyok00/codex-twitch-cohost/releases
-- **Linux `.AppImage`:** available now in release assets.
-- **Windows `.exe` and macOS `.dmg`:** included in release assets as they publish (currently untested / coming soon for stable support).
-- **Local build output path:** `src-tauri/target/release/bundle/appimage/`
+## Downloads
 
-## Features
+- Main releases page: https://github.com/greyok00/codex-twitch-cohost/releases
+- Current packaged assets include:
+  - Linux: `greyok-cohost-<version>-linux-x64.AppImage`
+  - Windows: `greyok-cohost-<version>-windows-x64.exe` (portable, non-setup)
+  - macOS: `greyok-cohost-<version>-macos.dmg`
 
-- Browser-based Twitch login using Twitch Device Code flow
-- Twitch IRC connect/read/send with reconnect loop
-- Real EventSub websocket subscriptions for follow/sub/gift/raid/reward/online/offline events
-- Automatic streamer API smoke checks on startup/login/connect
-- Personality-driven prompt engine from JSON profile
-- Memory store for recent chat and bot responses (sled-backed)
-- Provider routing with cloud-only mode support from UI
-- Local speech-to-text input (whisper-cli) with auto-send to bot prompt
-- Explicit URL open controls with validation
-- Lurk mode, model switching, memory clear, chat summarization
-- In-app health self-test panel (auth/session/chat/eventsub/provider checks)
-- Real-time diagnostics and status events streamed to UI
-- GitHub Actions matrix workflow for Windows/Linux/macOS builds
+## UI Preview
 
-## Tech Stack
+### Main Workspace
+![Main Workspace](docs/screenshots/01-main-session.png)
 
-- Desktop framework: `tauri` (`=2.10.3`)
-- Backend: Rust + Tokio async runtime
-- Frontend: Svelte + Vite
-- Storage: `sled`
-- Secret storage: OS keychain via `keyring`
+### Auth & Channel
+![Auth & Channel](docs/screenshots/02-auth-channel.png)
 
-## Repository Layout
+### AI Setup
+![AI Setup](docs/screenshots/03-ai-setup.png)
 
-- `src/` Svelte frontend
-- `src-tauri/src/` Rust backend (commands/services/pipeline)
-- `src-tauri/assets/piper-*` platform TTS resource folders
-- `config.example.json` runtime configuration template
-- `personality.example.json` personality profile template
-- `.github/workflows/release.yml` CI/CD packaging workflow
+### Voice Input
+![Voice Input](docs/screenshots/04-voice-input.png)
 
-## Prerequisites
+### Diagnostics
+![Diagnostics](docs/screenshots/05-diagnostics.png)
+
+### Memory
+![Memory](docs/screenshots/06-memory.png)
+
+### About
+![About](docs/screenshots/07-about.png)
+
+### Walkthrough Video
+- `docs/media/walkthrough.webm`
+
+## Requirements
 
 - Node.js 20+
 - npm 10+
-- Rust stable toolchain
-- Linux Tauri prereqs: WebKitGTK, GTK3, rsvg2, appindicator libs
+- Rust stable
+- Linux (dev/build): Tauri system deps  
+  (WebKitGTK, GTK3, librsvg, appindicator, ssl, etc.)
 
-Official Tauri prerequisites: https://tauri.app/start/prerequisites/
+Tauri prerequisites: https://tauri.app/start/prerequisites/
 
-## Quick Start
-
-1. Copy templates:
-
-```bash
-cp config.example.json config.json
-cp personality.example.json personality.json
-```
-
-2. Edit `config.json`:
-
-- Set Twitch OAuth `client_id` (and optionally `redirect_url`)
-- Do **not** hardcode provider keys in config; use in-app key storage (OS keychain)
-
-3. Install dependencies:
+## Quick Start (Developer)
 
 ```bash
 npm install
-```
-
-4. Run app:
-
-```bash
 npm run tauri dev
 ```
 
-## Quick Walkthrough
+## First-Run Setup (End User)
 
-1. Open app and go to **Twitch Login**.
-2. Click **Connect Bot** and finish OAuth in browser.
-3. Click **Connect Streamer** and finish OAuth in browser.
-4. Click **Connect Chat** (join is blocked until both Bot + Streamer are authenticated).
-5. In **Cloud AI Setup**, paste provider key once and pick model preset.
-6. Use **Main Session Chat Control** for local prompts and live bot responses.
-7. Optional: open **Avatar Popup** and align mouth placement.
+1. Open **Auth & Channel** tab.
+2. Enter Twitch Client ID (one-time) and save.
+3. Click `1) Connect Bot`.
+4. Click `2) Connect Streamer`.
+5. Click `3) Connect Chat`.
+6. Open **AI Setup**:
+   - set provider key,
+   - choose model/personality,
+   - optionally upload avatar.
+7. Open **Voice Input**:
+   - click `Auto-configure STT`,
+   - verify STT/TTS,
+   - apply TTS voice + volume.
+8. Use **Main Session Chat Control**:
+   - mic button for live transcription,
+   - send local prompts to AI (not posted to Twitch).
 
-## Twitch Login Flow
+## Core Usage Flow
 
-1. Click **Connect Bot** and authorize bot account.
-2. Click **Connect Streamer** and authorize streamer account.
-3. App opens Twitch verification URL in browser and polls device auth result.
-4. Tokens are stored in local keychain/local secure store.
-5. Chat connect requires both sessions when EventSub is enabled.
+### Auth + Chat
+- Bot account is used for IRC send/read.
+- Streamer account is used for EventSub/API checks.
+- App blocks chat connect until both sessions exist.
+- Account-role mismatch is actively rejected.
 
-## Runtime Controls
+### Conversational AI
+- Local prompts from app feed AI directly.
+- Twitch chat inputs can trigger responses by cadence/keyword/mention.
+- LLM failures now emit a local fallback reply instead of silent failure.
 
-- **Join Channel**: starts Twitch IRC and EventSub session
-- **Leave Channel**: disconnects IRC and EventSub
-- **Model Picker**: switches active provider model
-- **Health Self-Test**: runs local checks for auth/session/chat/EventSub/provider health
-- **Settings + Tools**: optional web search, explicit URL open, provider key storage
-- **Memory Panel**: summarize or clear memory
+### Voice
+- STT uses `whisper-cli` + local `.bin` model.
+- Auto-configure detects/provisions binary + model where possible.
+- TTS uses cloud synthesis first, then browser synthesis fallback.
 
-### In-Chat Bot Commands
+### Avatar Popup (OBS Layer)
+- Upload transparent PNG avatar.
+- Mouth + brow alignment persisted.
+- Popup supports hide/show controls and transparent background.
 
-- `!search <query>`
-- `!say <text>`
-- `!model <name>`
-- `!lurk on`
-- `!lurk off`
+## Commands (Chat/Voice)
 
-## EventSub Subscriptions
+Prefix-supported commands (recommended prefix: `_`; aliases `!`, `.`, `/`):
 
-Configured websocket subscriptions:
+- `_help`, `_commands`, `_menu`: show command guide
+- `_search <query>`: web search summary
+- `_say <text>`: local bot echo
+- `_model <name>`: switch active model
+- `_lurk on|off`: toggle lurk mode
+- `_todo add <minutes> <content>`: schedule one-time task
+- `_todo every <minutes> <content>`: schedule recurring task
+- `_todo list`: list tasks
+- `_todo done <id>`: mark task complete
+- `_todo run <id>`: run task immediately
+- `_agent ...`: alias for todo scheduling commands
 
-- `channel.follow` (v2)
-- `channel.subscribe`
-- `channel.subscription.gift`
-- `channel.raid`
-- `channel.channel_points_custom_reward_redemption.add`
-- `stream.online`
-- `stream.offline`
+Voice command aliases also map into command behavior (for supported phrases).
 
-## Voice Input
+## Config + Data Locations
 
-- Voice input uses local STT (`whisper-cli`) and can auto-send transcript as a streamer prompt.
-- Configure in `config.json`:
-  - `voice.stt_enabled: true`
-  - `voice.stt_binary_path: "whisper-cli"` (or full path)
-  - `voice.stt_model_path: "/absolute/path/to/model.bin"`
-- TTS remains optional and controlled separately.
+- Runtime config: user config dir (`~/.config/twitch-cohost-bot/config.json` on Linux)
+- Secrets: OS keyring + local secure fallback (`secrets.json` in config dir)
+- Personality profile: user config dir (`personality.json`)
+- Avatar data: app data dir under `avatar/avatar.json`
+- Memory DB: app data dir under `memory_db`
 
-## Packaging
+## Build / Package
 
 ```bash
 npm run build
 npm run tauri build
 ```
 
-Configured targets:
+Linux AppImage output is under:
+- `src-tauri/target/release/bundle/appimage/`
 
-- Linux AppImage
-- macOS DMG
-- Windows NSIS installer
+## Release Pipeline (All OS)
 
-### Run AppImage
+GitHub Actions workflow:
+- `.github/workflows/release.yml`
+- matrix builds for:
+  - `ubuntu-22.04` (AppImage),
+  - `windows-latest` (portable EXE),
+  - `macos-latest` (DMG).
 
-```bash
-chmod +x src-tauri/target/release/bundle/appimage/*.AppImage
-./src-tauri/target/release/bundle/appimage/*.AppImage
-```
-
-## Integration Smoke Test
-
-Run a local integration smoke test (checks + bounded dev boot):
+Tag release flow:
 
 ```bash
-npm run smoke:dev
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
-## CI/CD
-
-Workflow builds Linux/macOS/Windows matrix, uploads artifacts, and publishes on tags.
-
-## Security Defaults
-
-- URL opening restricted to `http/https`
-- explicit user intent required for opening links
-- moderation phrase blocking before response generation
-- OAuth callback state validation
-- Twitch/provider credentials stored in local OS keychain
-- `config.json` writes are sanitized to avoid persisting secrets (tokens/client secrets/provider keys)
+The workflow publishes draft release assets with normalized names:
+- `greyok-cohost-<tag>-linux-x64.AppImage`
+- `greyok-cohost-<tag>-windows-x64.exe`
+- `greyok-cohost-<tag>-macos.dmg`
 
 ## Troubleshooting
 
-- `No Twitch token available`: run OAuth connect first
-- `provider request timed out`: check local model endpoint and timeout
-- Piper not used: verify piper binary/model/config in asset paths or config overrides
-- STT failed: verify `whisper-cli` in PATH and configured local model file
+- `OAuth is not configured...`: set Twitch Client ID first.
+- `Bot login required`: connect Bot account.
+- `Streamer login required`: connect Streamer account.
+- `invalid OAuth token`: clear/reconnect affected account session.
+- `STT runtime is missing`: run Voice -> Auto-configure STT.
+- `LLM generation failed`: check provider key/model; fallback message should still appear locally.
+- `search is disabled`: use command path that enables conversational search or enable search in config.
+
+## Dev Validation
+
+```bash
+npm run check
+cargo check --manifest-path src-tauri/Cargo.toml
+npm run smoke:dev
+```
+
+## Notes
+
+- Windows and macOS builds are produced in CI and should be treated as pre-release/untested until validated on target machines.
+- Linux AppImage is the primary tested packaging target.

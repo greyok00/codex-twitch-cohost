@@ -215,28 +215,6 @@ async fn run_irc_loop(
                                         "content": format!("Joined chatroom #{} as {}", channel, nick),
                                         "timestamp": chrono::Utc::now().to_rfc3339()
                                     }));
-                                    let status_line = build_join_status_report(&channel);
-                                    let payload = format!("PRIVMSG #{} :{}", channel, sanitize_for_twitch(&status_line));
-                                    match writer.send(Message::Text(payload.into())).await {
-                                        Ok(()) => {
-                                            let _ = app.emit("timeline_event", serde_json::json!({
-                                                "id": uuid::Uuid::new_v4().to_string(),
-                                                "kind": "irc",
-                                                "content": "Posted automatic connection status report to chat",
-                                                "timestamp": chrono::Utc::now().to_rfc3339()
-                                            }));
-                                        }
-                                        Err(err) => {
-                                            let msg = format!("Failed sending automatic connection status report: {}", err);
-                                            let _ = app.emit("error_banner", msg.clone());
-                                            let _ = app.emit("timeline_event", serde_json::json!({
-                                                "id": uuid::Uuid::new_v4().to_string(),
-                                                "kind": "irc_error",
-                                                "content": msg,
-                                                "timestamp": chrono::Utc::now().to_rfc3339()
-                                            }));
-                                        }
-                                    }
                                 }
 
                                 if lower.contains(" notice #")
@@ -287,7 +265,9 @@ async fn run_irc_loop(
                                         "timestamp": chrono::Utc::now().to_rfc3339()
                                     }));
                                 }
-                                if let Some(chat) = parse_privmsg_line(line) {
+                                if let Some(mut chat) = parse_privmsg_line(line) {
+                                    let chat_user = chat.user.trim().trim_start_matches('#').to_lowercase();
+                                    chat.is_bot = !nick_name.is_empty() && chat_user == nick_name;
                                     let _ = app.emit("chat_message", &chat);
                                     let _ = queue_tx.send(PipelineInput::Chat(chat)).await;
                                 }
@@ -396,12 +376,4 @@ fn sanitize_for_twitch(content: &str) -> String {
         .chars()
         .take(480)
         .collect::<String>()
-}
-
-fn build_join_status_report(channel: &str) -> String {
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S %Z");
-    format!(
-        "Status report: connected to #{} at {}. Joke: I bill by the hour, but this bot works pro-bono for good vibes.",
-        channel, now
-    )
 }

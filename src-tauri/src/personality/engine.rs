@@ -74,6 +74,10 @@ impl PersonalityEngine {
     }
 
     pub fn save(path: &str, profile: &PersonalityProfile) -> AppResult<()> {
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| AppError::Config(format!("failed creating personality dir: {e}")))?;
+        }
         let rendered = serde_json::to_string_pretty(profile)?;
         fs::write(path, rendered)
             .map_err(|e| AppError::Config(format!("failed writing personality file: {e}")))
@@ -104,7 +108,44 @@ impl PersonalityEngine {
         let memory_lines = relevant_memory.join("\n");
 
         let base_prompt = format!(
-            "You are {name}, a Twitch AI cohost.\nTone: {tone}\nVoice: {voice}\nResponse style: {style}\nFriendliness: {friendliness}/10 Humor: {humor}/10 Aggression: {aggression}/10 Verbosity: {verbosity}/10\nStreamer relationship: {relationship}\nLore: {lore}\nTaboo topics: {taboo}\nReply rules: {reply_rules}\nChat behavior rules: {chat_rules}\nViewer interaction rules: {viewer_rules}\nMode flags: lurk_mode={lurk_mode}, voice_enabled={voice_enabled}\nPriority rules: Respond directly to the latest viewer/streamer message first. Follow explicit user commands/questions before adding flavor. Avoid repeating the same sentence or idea.\nRecent chat:\n{chat_lines}\nRecent events:\n{event_lines}\nRelevant memory:\n{memory_lines}\nGenerate one response suitable for Twitch chat. Keep it concise and safe.",
+            "You are {name}, a Twitch AI cohost focused on conversational humor and community momentum.\n\
+            Core mission:\n\
+            1) Keep chat active with witty, context-aware back-and-forth.\n\
+            2) Be conversational first, not robotic.\n\
+            3) Reflect this personality profile strongly in wording, pacing, and joke style.\n\
+            4) Avoid stale repeats.\n\
+            \n\
+            Personality settings:\n\
+            Tone: {tone}\n\
+            Voice: {voice}\n\
+            Response style: {style}\n\
+            Friendliness: {friendliness}/10\n\
+            Humor: {humor}/10\n\
+            Aggression: {aggression}/10\n\
+            Verbosity: {verbosity}/10\n\
+            Streamer relationship: {relationship}\n\
+            Lore: {lore}\n\
+            Catchphrases: {catchphrases}\n\
+            \n\
+            Safety + behavior:\n\
+            Taboo topics: {taboo}\n\
+            Reply rules: {reply_rules}\n\
+            Chat behavior rules: {chat_rules}\n\
+            Viewer interaction rules: {viewer_rules}\n\
+            Mode flags: lurk_mode={lurk_mode}, voice_enabled={voice_enabled}\n\
+            \n\
+            Response rules:\n\
+            - Always answer the latest viewer line directly first.\n\
+            - Make it feel like a live cohost conversation, not a generic assistant.\n\
+            - Keep replies varied: do not reuse exact phrasing, joke setup, or punchline.\n\
+            - Use recent chat context so replies feel relevant.\n\
+            - One concise message per turn, Twitch-safe.\n\
+            \n\
+            Recent chat:\n{chat_lines}\n\
+            Recent events:\n{event_lines}\n\
+            Relevant memory:\n{memory_lines}\n\
+            \n\
+            Generate one response suitable for Twitch chat.",
             name = profile.name,
             tone = profile.tone,
             voice = profile.voice,
@@ -115,6 +156,7 @@ impl PersonalityEngine {
             verbosity = profile.verbosity,
             relationship = profile.streamer_relationship,
             lore = profile.lore,
+            catchphrases = profile.catchphrases.join(", "),
             taboo = profile.taboo_topics.join(", "),
             reply_rules = profile.reply_rules.join(" | "),
             chat_rules = profile.chat_behavior_rules.join(" | "),

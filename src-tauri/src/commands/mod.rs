@@ -26,12 +26,24 @@ fn map_err<T>(value: AppResult<T>) -> Result<T, String> {
     value.map_err(|e| e.to_string())
 }
 
-async fn acquire_task_permit(shared: &Arc<crate::state::SharedState>) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+async fn acquire_stt_permit(
+    shared: &Arc<crate::state::SharedState>,
+) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
     shared
         .stt_gate
         .clone()
         .try_acquire_owned()
-        .map_err(|_| "Speech lane is busy. Please wait a moment and retry.".to_string())
+        .map_err(|_| "STT lane is busy. Please wait a moment and retry.".to_string())
+}
+
+async fn acquire_tts_permit(
+    shared: &Arc<crate::state::SharedState>,
+) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    shared
+        .tts_gate
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| "TTS lane is busy. Please wait a moment and retry.".to_string())
 }
 
 async fn acquire_search_permit(
@@ -86,6 +98,15 @@ fn set_connect_error(app_handle: &AppHandle, shared: &std::sync::Arc<crate::stat
 
 fn normalize_login(value: &str) -> String {
     value.trim().trim_start_matches('#').to_lowercase()
+}
+
+fn is_invalid_oauth_error_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("401 unauthorized")
+        || lower.contains("invalid oauth token")
+        || lower.contains("invalid oauth")
+        || lower.contains("invalid token")
+        || lower.contains("oauth token")
 }
 
 fn first_existing(candidates: &[PathBuf]) -> Option<String> {
@@ -245,6 +266,172 @@ fn detect_fast_whisper_model(app_handle: Option<&AppHandle>) -> Option<String> {
     candidates.push(PathBuf::from("./models/ggml-base.en.bin"));
     candidates.push(PathBuf::from("./models/whisper/ggml-base.en.bin"));
     first_existing(&candidates)
+}
+
+fn is_path_like(binary: &str) -> bool {
+    binary.contains('/') || binary.contains('\\')
+}
+
+fn can_execute_binary(binary: &str) -> bool {
+    if binary.trim().is_empty() {
+        return false;
+    }
+    if is_path_like(binary) {
+        let path = PathBuf::from(binary);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if !meta.is_file() {
+                return false;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                return true;
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                return meta.permissions().mode() & 0o111 != 0;
+            }
+        }
+        return false;
+    }
+    command_in_path(binary)
+}
+
+async fn resolve_or_repair_stt_config(
+    app_handle: &AppHandle,
+    shared: &Arc<crate::state::SharedState>,
+) -> Result<crate::config::VoiceConfig, String> {
+    let mut cfg = shared.config.read().voice.clone();
+    let mut changed = false;
+
+    let current_bin = cfg.stt_binary_path.clone().unwrap_or_default();
+    let bin_ok = !current_bin.trim().is_empty() && can_execute_binary(current_bin.trim());
+    if !bin_ok {
+        if let Some(bin) = detect_fast_whisper_binary(Some(app_handle)) {
+            cfg.stt_binary_path = Some(bin);
+            changed = true;
+        }
+    }
+
+    let current_model = cfg.stt_model_path.clone().unwrap_or_default();
+    let model_ok = !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_file();
+    if !model_ok {
+        if let Some(model) = detect_fast_whisper_model(Some(app_handle)) {
+            cfg.stt_model_path = Some(model);
+            changed = true;
+        }
+    }
+
+    let ready = cfg
+        .stt_binary_path
+        .as_deref()
+        .is_some_and(|b| !b.trim().is_empty() && can_execute_binary(b))
+        && cfg
+            .stt_model_path
+            .as_deref()
+            .is_some_and(|m| !m.trim().is_empty() && PathBuf::from(m.trim()).is_file());
+
+    if ready && !cfg.stt_enabled {
+        cfg.stt_enabled = true;
+        changed = true;
+    }
+
+    if changed {
+        let mut full = shared.config.write();
+        full.voice = cfg.clone();
+        full.save_to_disk().map_err(|e| e.to_string())?;
+    }
+
+    if !ready {
+        return Err("STT runtime is missing. Use Voice -> Auto-configure STT, then retry mic.".to_string());
+    }
+
+    Ok(cfg)
+}
+
+fn silence_wav_base64(duration_ms: u32) -> String {
+    let sample_rate: u32 = 16_000;
+    let channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let bytes_per_sample = (bits_per_sample / 8) as u32;
+    let num_samples = (sample_rate as u64 * duration_ms as u64 / 1000) as u32;
+    let data_size = num_samples * bytes_per_sample * channels as u32;
+    let byte_rate = sample_rate * channels as u32 * bytes_per_sample;
+    let block_align = channels * (bits_per_sample / 8);
+    let chunk_size = 36 + data_size;
+
+    let mut out = Vec::with_capacity((44 + data_size) as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&chunk_size.to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
+    out.extend_from_slice(&block_align.to_le_bytes());
+    out.extend_from_slice(&bits_per_sample.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_size.to_le_bytes());
+    out.resize((44 + data_size) as usize, 0);
+    base64::engine::general_purpose::STANDARD.encode(out)
+}
+
+fn edge_tts_candidates() -> Vec<String> {
+    let mut bins = Vec::new();
+    if let Ok(bin) = std::env::var("COHOST_EDGE_TTS_BIN") {
+        if !bin.trim().is_empty() {
+            bins.push(bin);
+        }
+    }
+    bins.push("../.venv-edge-tts/bin/edge-tts".to_string());
+    bins.push("./.venv-edge-tts/bin/edge-tts".to_string());
+    bins.push("/home/grey/codex-twitch-cohost/.venv-edge-tts/bin/edge-tts".to_string());
+    bins.push("edge-tts".to_string());
+    bins
+}
+
+async fn synthesize_tts_cloud_with_voice(clean: &str, voice: &str) -> Result<String, String> {
+    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
+    let audio_path = tmp.path().join("edge_tts.mp3");
+    let mut last_err: Option<String> = None;
+
+    for bin in edge_tts_candidates() {
+        let mut cmd = Command::new(&bin);
+        cmd.arg("--voice")
+            .arg(voice)
+            .arg("--rate")
+            .arg("+0%")
+            .arg("--text")
+            .arg(clean)
+            .arg("--write-media")
+            .arg(&audio_path);
+
+        let run = timeout(Duration::from_secs(20), cmd.output()).await;
+        match run {
+            Ok(Ok(output)) => {
+                if output.status.success() && audio_path.exists() {
+                    let bytes = tokio::fs::read(&audio_path)
+                        .await
+                        .map_err(|e| format!("failed reading synthesized audio: {e}"))?;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    return Ok(format!("data:audio/mpeg;base64,{b64}"));
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                last_err = Some(format!("edge-tts failed for {bin}: {}", stderr.trim()));
+            }
+            Ok(Err(e)) => {
+                last_err = Some(format!("edge-tts launch failed for {bin}: {e}"));
+            }
+            Err(_) => {
+                last_err = Some(format!("edge-tts timed out for {bin}"));
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        "edge-tts not available; install it and set COHOST_EDGE_TTS_BIN if needed".to_string()
+    }))
 }
 
 async fn try_download_fast_whisper_model(app_handle: &AppHandle) -> Result<Option<String>, String> {
@@ -430,15 +617,20 @@ struct OAuthProfileUpdatedEvent {
 fn emit_oauth_profile_updated(
     app_handle: &AppHandle,
     bot_username: String,
-    channel: String,
+    _channel: String,
     broadcaster_login: Option<String>,
 ) {
+    let normalized_broadcaster = broadcaster_login
+        .as_deref()
+        .map(normalize_login)
+        .filter(|v| !v.is_empty());
+    let effective_channel = normalized_broadcaster.clone().unwrap_or_default();
     let _ = app_handle.emit(
         "oauth_profile_updated",
         OAuthProfileUpdatedEvent {
-            bot_username,
-            channel,
-            broadcaster_login,
+            bot_username: normalize_login(&bot_username),
+            channel: effective_channel,
+            broadcaster_login: normalized_broadcaster,
         },
     );
 }
@@ -507,8 +699,26 @@ async fn run_streamer_api_smoke_check(
             );
         }
         Err(err) => {
+            if is_invalid_oauth_error_message(&err.to_string()) {
+                let _ = shared
+                    .secrets
+                    .clear_twitch_session(&broadcaster_token_key(&broadcaster_login));
+                let msg = format!(
+                    "Streamer API check skipped ({source}): streamer session expired for {broadcaster_login}; reconnect streamer account"
+                );
+                let _ = app_handle.emit(
+                    "timeline_event",
+                    serde_json::json!({
+                        "id": uuid::Uuid::new_v4().to_string(),
+                        "kind": "eventsub_check",
+                        "content": msg,
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    }),
+                );
+                shared.diagnostics.write().last_error = None;
+                return;
+            }
             let msg = format!("Streamer API check failed ({source}): {err}");
-            let _ = app_handle.emit("error_banner", msg.clone());
             let _ = app_handle.emit(
                 "timeline_event",
                 serde_json::json!({
@@ -527,26 +737,18 @@ async fn resolve_saved_token(
     shared: &std::sync::Arc<crate::state::SharedState>,
     cfg: &crate::config::AppConfig,
 ) -> Result<(String, String), String> {
-    let mut key = cfg.twitch.bot_username.clone();
-    let mut token = shared
+    let key = normalize_login(&cfg.twitch.bot_username);
+    if key.is_empty() {
+        return Err("Bot username is empty. Connect Bot first.".to_string());
+    }
+    let token = shared
         .secrets
         .get_twitch_token(&key)
         .map_err(|e| e.to_string())?;
 
-    if token.is_none() && !cfg.twitch.channel.trim().is_empty() {
-        key = cfg.twitch.channel.clone();
-        token = shared
-            .secrets
-            .get_twitch_token(&key)
-            .map_err(|e| e.to_string())?;
-    }
-
     match token {
         Some(t) => Ok((key, t)),
-        None => Err(format!(
-            "No Twitch token available for channel '{}' (or bot '{}'). Run Connect Twitch first.",
-            cfg.twitch.channel, cfg.twitch.bot_username
-        )),
+        None => Err(format!("No Twitch bot token available for '{}'. Run Connect Bot first.", key)),
     }
 }
 
@@ -580,21 +782,7 @@ fn has_bot_session(
     shared: &std::sync::Arc<crate::state::SharedState>,
     cfg: &crate::config::AppConfig,
 ) -> bool {
-    let channel = normalize_login(&cfg.twitch.channel);
     let bot_username = normalize_login(&cfg.twitch.bot_username);
-    let channel_has_token = if channel.is_empty() {
-        false
-    } else {
-        shared
-            .secrets
-            .get_twitch_token(&channel)
-            .ok()
-            .flatten()
-            .is_some()
-    };
-    if channel_has_token {
-        return true;
-    }
     if bot_username.is_empty() {
         return false;
     }
@@ -697,6 +885,24 @@ pub struct TtsVoiceView {
     pub volume_percent: Option<u8>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceRuntimeCheck {
+    pub name: String,
+    pub status: String,
+    pub details: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceRuntimeReport {
+    pub generated_at: String,
+    pub overall: String,
+    pub stt_ready: bool,
+    pub tts_ready: bool,
+    pub checks: Vec<VoiceRuntimeCheck>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AvatarImageView {
@@ -779,7 +985,6 @@ pub async fn get_auth_sessions(
 ) -> Result<AuthSessionsView, String> {
     let cfg = state.0.config.read().clone();
     let bot_username = normalize_login(&cfg.twitch.bot_username);
-    let channel = normalize_login(&cfg.twitch.channel);
     let broadcaster_login = cfg
         .twitch
         .broadcaster_login
@@ -796,13 +1001,7 @@ pub async fn get_auth_sessions(
             .is_some()
     } else {
         false
-    } || (!channel.is_empty()
-        && state
-            .0
-            .secrets
-            .get_twitch_token(&channel)
-            .map_err(|e| e.to_string())?
-            .is_some());
+    };
 
     let streamer_token_present = if let Some(login) = broadcaster_login.as_ref() {
         state
@@ -820,10 +1019,11 @@ pub async fn get_auth_sessions(
         None
     };
 
+    let visible_channel = visible_broadcaster_login.clone().unwrap_or_default();
     Ok(AuthSessionsView {
         bot_username,
         bot_token_present,
-        channel,
+        channel: visible_channel,
         broadcaster_login: visible_broadcaster_login,
         streamer_token_present,
     })
@@ -896,6 +1096,161 @@ pub async fn set_tts_volume(
     cfg.save_to_disk().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn verify_voice_runtime(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<VoiceRuntimeReport, String> {
+    let cfg = state.0.config.read().voice.clone();
+    let mut checks: Vec<VoiceRuntimeCheck> = Vec::new();
+    let mut stt_ready = false;
+    let mut tts_ready = false;
+    let mut has_fail = false;
+    let mut has_warn = false;
+
+    let mut push = |name: &str, status: &str, details: String| {
+        if status == "fail" {
+            has_fail = true;
+        } else if status == "warn" {
+            has_warn = true;
+        }
+        checks.push(VoiceRuntimeCheck {
+            name: name.to_string(),
+            status: status.to_string(),
+            details,
+        });
+    };
+
+    if cfg.stt_enabled {
+        let requested_bin = cfg.stt_binary_path.clone().unwrap_or_default();
+        let resolved_bin = if can_execute_binary(&requested_bin) {
+            Some(requested_bin)
+        } else {
+            detect_fast_whisper_binary(Some(&app_handle))
+        };
+        match resolved_bin.as_ref() {
+            Some(bin) => push("STT binary", "pass", format!("Using STT binary: {bin}")),
+            None => push(
+                "STT binary",
+                "fail",
+                "No usable whisper executable found. Configure STT binary path or install whisper-cli.".to_string(),
+            ),
+        }
+
+        let requested_model = cfg.stt_model_path.clone().unwrap_or_default();
+        let resolved_model = if !requested_model.trim().is_empty() && PathBuf::from(&requested_model).is_file() {
+            Some(requested_model)
+        } else {
+            detect_fast_whisper_model(Some(&app_handle))
+        };
+        match resolved_model.as_ref() {
+            Some(model) => push("STT model", "pass", format!("Using STT model: {model}")),
+            None => push(
+                "STT model",
+                "fail",
+                "No whisper model found. Configure STT model path or run STT auto-configure.".to_string(),
+            ),
+        }
+
+        if let (Some(bin), Some(model)) = (resolved_bin, resolved_model) {
+            let _permit = acquire_stt_permit(&state.0).await?;
+            let mut smoke_cfg = cfg.clone();
+            smoke_cfg.stt_enabled = true;
+            smoke_cfg.stt_binary_path = Some(bin);
+            smoke_cfg.stt_model_path = Some(model);
+            let sample = silence_wav_base64(700);
+            match timeout(
+                Duration::from_secs(20),
+                stt::transcribe_base64_audio(&smoke_cfg, &sample, "audio/wav"),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    stt_ready = true;
+                    push(
+                        "STT process smoke test",
+                        "pass",
+                        "Whisper process launched and returned a transcript payload.".to_string(),
+                    );
+                }
+                Ok(Err(err)) => push("STT process smoke test", "fail", err.to_string()),
+                Err(_) => push(
+                    "STT process smoke test",
+                    "fail",
+                    "Timed out while loading STT runtime.".to_string(),
+                ),
+            }
+        }
+    } else {
+        push(
+            "STT enabled",
+            "warn",
+            "STT is disabled in settings. Enable STT for mic transcription.".to_string(),
+        );
+    }
+
+    if cfg.enabled {
+        let voice = cfg
+            .voice_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("auto"))
+            .unwrap_or("en-US-JennyNeural");
+        let _permit = acquire_tts_permit(&state.0).await?;
+        match timeout(
+            Duration::from_secs(25),
+            synthesize_tts_cloud_with_voice("voice runtime check", voice),
+        )
+        .await
+        {
+            Ok(Ok(payload)) => {
+                if payload.starts_with("data:audio/") {
+                    tts_ready = true;
+                    push(
+                        "TTS process smoke test",
+                        "pass",
+                        format!("edge-tts synthesis succeeded with voice {voice}."),
+                    );
+                } else {
+                    push(
+                        "TTS process smoke test",
+                        "fail",
+                        "TTS returned an invalid audio payload.".to_string(),
+                    );
+                }
+            }
+            Ok(Err(err)) => push("TTS process smoke test", "fail", err),
+            Err(_) => push(
+                "TTS process smoke test",
+                "fail",
+                "Timed out while loading TTS runtime.".to_string(),
+            ),
+        }
+    } else {
+        push(
+            "TTS enabled",
+            "warn",
+            "TTS is disabled in settings. Enable voice output for spoken replies.".to_string(),
+        );
+    }
+
+    let overall = if has_fail {
+        "fail"
+    } else if has_warn {
+        "warn"
+    } else {
+        "pass"
+    };
+
+    Ok(VoiceRuntimeReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        overall: overall.to_string(),
+        stt_ready,
+        tts_ready,
+        checks,
+    })
+}
+
 fn avatar_store_paths(app_handle: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
     let app_data = app_handle
         .path()
@@ -960,7 +1315,7 @@ pub async fn auto_configure_stt_fast(
     app_handle: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<SttAutoConfigResult, String> {
-    let _permit = acquire_task_permit(&state.0).await?;
+    let _permit = acquire_stt_permit(&state.0).await?;
     emit_stt_progress(&app_handle, "start", 3, "Starting Whisper setup...");
     emit_stt_progress(&app_handle, "scan_binary", 8, "Checking Whisper executable...");
     let detected_binary = match detect_fast_whisper_binary(Some(&app_handle)) {
@@ -1035,66 +1390,118 @@ pub async fn clear_auth_sessions(
 }
 
 #[tauri::command]
-pub async fn synthesize_tts_cloud(text: String) -> Result<String, String> {
+pub async fn clear_bot_session(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state.0.twitch.disconnect().await;
+    state.0.eventsub.stop().await;
+    app::update_twitch_state(&state.0, ConnectionState::Disconnected);
+
+    let (bot_username, channel, broadcaster_login) = {
+        let cfg = state.0.config.read();
+        (
+            normalize_login(&cfg.twitch.bot_username),
+            normalize_login(&cfg.twitch.channel),
+            cfg.twitch
+                .broadcaster_login
+                .as_deref()
+                .map(normalize_login)
+                .filter(|v| !v.is_empty()),
+        )
+    };
+
+    if !bot_username.is_empty() {
+        state
+            .0
+            .secrets
+            .clear_twitch_session(&bot_username)
+            .map_err(|e| e.to_string())?;
+    }
+    if !channel.is_empty() && channel != bot_username {
+        let _ = state.0.secrets.clear_twitch_session(&channel);
+    }
+
+    {
+        let mut cfg = state.0.config.write();
+        cfg.twitch.bot_username.clear();
+        cfg.twitch.bot_token = None;
+        cfg.save_to_disk().map_err(|e| e.to_string())?;
+    }
+
+    emit_oauth_profile_updated(&app_handle, String::new(), channel, broadcaster_login);
+    let _ = app_handle.emit("timeline_event", serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "kind": "oauth",
+        "content": "Cleared Bot auth session",
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_streamer_session(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    state.0.twitch.disconnect().await;
+    state.0.eventsub.stop().await;
+    app::update_twitch_state(&state.0, ConnectionState::Disconnected);
+
+    let (bot_username, channel, broadcaster_login) = {
+        let cfg = state.0.config.read();
+        (
+            normalize_login(&cfg.twitch.bot_username),
+            normalize_login(&cfg.twitch.channel),
+            cfg.twitch
+                .broadcaster_login
+                .as_deref()
+                .map(normalize_login)
+                .filter(|v| !v.is_empty()),
+        )
+    };
+
+    if let Some(login) = broadcaster_login.as_ref() {
+        state
+            .0
+            .secrets
+            .clear_twitch_session(&broadcaster_token_key(login))
+            .map_err(|e| e.to_string())?;
+    }
+
+    {
+        let mut cfg = state.0.config.write();
+        cfg.twitch.broadcaster_login = None;
+        cfg.save_to_disk().map_err(|e| e.to_string())?;
+    }
+
+    emit_oauth_profile_updated(&app_handle, bot_username, channel, None);
+    let _ = app_handle.emit("timeline_event", serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "kind": "oauth",
+        "content": "Cleared Streamer auth session",
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn synthesize_tts_cloud(
+    state: tauri::State<'_, AppState>,
+    text: String,
+    voice_name: Option<String>,
+) -> Result<String, String> {
+    let _permit = acquire_tts_permit(&state.0).await?;
     let clean = text.trim();
     if clean.is_empty() {
         return Err("text is required".to_string());
     }
-
-    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
-    let audio_path = tmp.path().join("edge_tts.mp3");
-
-    let candidates = [
-        std::env::var("COHOST_EDGE_TTS_BIN").ok(),
-        Some("../.venv-edge-tts/bin/edge-tts".to_string()),
-        Some("./.venv-edge-tts/bin/edge-tts".to_string()),
-        Some("/home/grey/codex-twitch-cohost/.venv-edge-tts/bin/edge-tts".to_string()),
-        Some("edge-tts".to_string()),
-    ];
-
-    let mut last_err: Option<String> = None;
-    let mut completed = false;
-    for bin in candidates.iter().flatten() {
-        let mut cmd = Command::new(bin);
-        cmd.arg("--voice")
-            .arg("en-US-JennyNeural")
-            .arg("--rate")
-            .arg("+0%")
-            .arg("--text")
-            .arg(clean)
-            .arg("--write-media")
-            .arg(&audio_path);
-
-        let run = timeout(Duration::from_secs(20), cmd.output()).await;
-        match run {
-            Ok(Ok(output)) => {
-                if output.status.success() && audio_path.exists() {
-                    completed = true;
-                    break;
-                }
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                last_err = Some(format!("edge-tts failed for {bin}: {}", stderr.trim()));
-            }
-            Ok(Err(e)) => {
-                last_err = Some(format!("edge-tts launch failed for {bin}: {e}"));
-            }
-            Err(_) => {
-                last_err = Some(format!("edge-tts timed out for {bin}"));
-            }
-        }
-    }
-
-    if !completed {
-        return Err(last_err.unwrap_or_else(|| {
-            "edge-tts not available; install it and set COHOST_EDGE_TTS_BIN if needed".to_string()
-        }));
-    }
-
-    let bytes = tokio::fs::read(&audio_path)
-        .await
-        .map_err(|e| format!("failed reading synthesized audio: {e}"))?;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Ok(format!("data:audio/mpeg;base64,{b64}"))
+    let voice = voice_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("auto"))
+        .unwrap_or("en-US-JennyNeural");
+    synthesize_tts_cloud_with_voice(clean, voice).await
 }
 
 #[tauri::command]
@@ -1126,25 +1533,18 @@ pub async fn run_self_test(state: tauri::State<'_, AppState>) -> Result<SelfTest
     }
 
     let bot_username = normalize_login(&cfg.twitch.bot_username);
-    let bot_token_present = (!bot_username.is_empty()
+    let bot_token_present = !bot_username.is_empty()
         && shared
             .secrets
             .get_twitch_token(&bot_username)
             .ok()
             .flatten()
-            .is_some())
-        || (!channel.is_empty()
-            && shared
-                .secrets
-                .get_twitch_token(&channel)
-                .ok()
-                .flatten()
-                .is_some());
+            .is_some();
     if bot_token_present {
         push(
             "Bot auth session",
             "pass",
-            format!("Bot token is available for {}", if !bot_username.is_empty() { bot_username } else { channel.clone() }),
+            format!("Bot token is available for {}", bot_username),
         );
     } else {
         push("Bot auth session", "fail", "Bot token missing. Connect Bot first.".to_string());
@@ -1325,7 +1725,7 @@ pub async fn start_twitch_oauth(
                         .as_deref()
                         .map(normalize_login)
                         .filter(|v| !v.is_empty())
-                        .unwrap_or_else(|| normalize_login(&user.login));
+                        .unwrap_or_default();
                 } else {
                     next.twitch.channel = normalize_login(&next.twitch.channel);
                 }
@@ -1334,6 +1734,7 @@ pub async fn start_twitch_oauth(
                     .broadcaster_login
                     .as_ref()
                     .is_none_or(|v| is_placeholder(v))
+                    && !next.twitch.channel.is_empty()
                 {
                     next.twitch.broadcaster_login = Some(next.twitch.channel.clone());
                 }
@@ -1478,22 +1879,52 @@ pub async fn start_twitch_oauth(
                 match oauth::fetch_current_user(&cfg.twitch.client_id, &token_resp.access_token).await {
                     Ok(user) => {
                         let auth_login = normalize_login(&user.login);
+                        let current_bot = normalize_login(&cfg.twitch.bot_username);
+                        let current_streamer = cfg
+                            .twitch
+                            .broadcaster_login
+                            .as_deref()
+                            .map(normalize_login)
+                            .filter(|v| !v.is_empty());
+                        if is_streamer_role && !current_bot.is_empty() && auth_login == current_bot {
+                            let msg = "Streamer account must be different from Bot account. Please sign in with a separate streamer account.".to_string();
+                            let _ = app_handle.emit("error_banner", msg.clone());
+                            let _ = app_handle.emit("timeline_event", serde_json::json!({
+                                "id": uuid::Uuid::new_v4().to_string(),
+                                "kind": "oauth",
+                                "content": msg,
+                                "timestamp": chrono::Utc::now().to_rfc3339()
+                            }));
+                            app::update_twitch_state(&shared, ConnectionState::Disconnected);
+                            return;
+                        }
+                        if !is_streamer_role
+                            && current_streamer.as_ref().is_some_and(|streamer| *streamer == auth_login)
+                        {
+                            let msg = "Bot account must be different from Streamer account. Please sign in with a separate bot account.".to_string();
+                            let _ = app_handle.emit("error_banner", msg.clone());
+                            let _ = app_handle.emit("timeline_event", serde_json::json!({
+                                "id": uuid::Uuid::new_v4().to_string(),
+                                "kind": "oauth",
+                                "content": msg,
+                                "timestamp": chrono::Utc::now().to_rfc3339()
+                            }));
+                            app::update_twitch_state(&shared, ConnectionState::Disconnected);
+                            return;
+                        }
                         if is_streamer_role {
                             cfg.twitch.broadcaster_login = Some(auth_login.clone());
                             cfg.twitch.channel = auth_login.clone();
                             token_channel_key = broadcaster_token_key(&auth_login);
                         } else {
                             cfg.twitch.bot_username = auth_login.clone();
-                            if is_placeholder(&cfg.twitch.channel) {
-                                cfg.twitch.channel = existing_broadcaster
-                                    .clone()
-                                    .unwrap_or_else(|| auth_login.clone());
-                            }
+                            cfg.twitch.channel = existing_broadcaster.clone().unwrap_or_default();
                             if cfg
                                 .twitch
                                 .broadcaster_login
                                 .as_ref()
                                 .is_none_or(|v| is_placeholder(v))
+                                && !cfg.twitch.channel.is_empty()
                             {
                                 cfg.twitch.broadcaster_login = Some(cfg.twitch.channel.clone());
                             }
@@ -1521,11 +1952,6 @@ pub async fn start_twitch_oauth(
                     let _ = shared
                         .secrets
                         .set_twitch_refresh_token(&token_channel_key, &refresh_token);
-                }
-                if !is_streamer_role && cfg.twitch.channel != token_channel_key {
-                    let _ = shared
-                        .secrets
-                        .set_twitch_token(&cfg.twitch.channel, &token_resp.access_token);
                 }
                 cfg.twitch.bot_token = None;
                 cfg.twitch.bot_username = normalize_login(&cfg.twitch.bot_username);
@@ -1684,7 +2110,13 @@ async fn connect_twitch_chat_internal(
         }));
         return Err(msg);
     }
-    let mut channel = normalize_login(&cfg.twitch.channel);
+    let mut channel = cfg
+        .twitch
+        .broadcaster_login
+        .as_deref()
+        .map(normalize_login)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| normalize_login(&cfg.twitch.channel));
     let mut bot_username = normalize_login(&cfg.twitch.bot_username);
     let client_id = cfg.twitch.client_id.clone();
     let token = if let Some(token) = cfg.twitch.bot_token.clone() {
@@ -1716,7 +2148,7 @@ async fn connect_twitch_chat_internal(
                 .as_deref()
                 .map(normalize_login)
                 .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| normalize_login(&identity.login));
+                .unwrap_or_default();
         }
         let mut next = cfg.clone();
         next.twitch.bot_username = normalize_login(&bot_username);
@@ -1744,7 +2176,32 @@ async fn connect_twitch_chat_internal(
         return Err(msg);
     }
 
-    let _ = shared.secrets.set_twitch_token(&channel, &token);
+    // Prevent account-role mixups: bot token must not resolve to the streamer account.
+    let broadcaster_login = cfg
+        .twitch
+        .broadcaster_login
+        .as_deref()
+        .map(normalize_login)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_default();
+    if !broadcaster_login.is_empty() {
+        if let Ok(identity) = oauth::fetch_current_user(&cfg.twitch.client_id, &token).await {
+            let token_login = normalize_login(&identity.login);
+            if token_login == broadcaster_login {
+                let _ = shared.secrets.clear_twitch_session(&bot_username);
+                let msg = "Bot account token matches streamer account. Reconnect Bot with a separate account.".to_string();
+                let _ = app_handle.emit("timeline_event", serde_json::json!({
+                    "id": uuid::Uuid::new_v4().to_string(),
+                    "kind": "oauth",
+                    "content": msg.clone(),
+                    "timestamp": chrono::Utc::now().to_rfc3339()
+                }));
+                app::update_twitch_state(&shared, ConnectionState::Disconnected);
+                return Err(msg);
+            }
+        }
+    }
+
     let _ = shared.secrets.set_twitch_token(&bot_username, &token);
 
     if let Err(err) = shared
@@ -1836,7 +2293,6 @@ pub async fn send_chat_message(
     if trimmed.is_empty() {
         return Ok(());
     }
-    map_err(state.0.twitch.send_message(trimmed.to_string()).await)?;
     let echo = crate::state::ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         user: state.0.config.read().twitch.bot_username.clone(),
@@ -1848,7 +2304,7 @@ pub async fn send_chat_message(
     let _ = app_handle.emit("timeline_event", serde_json::json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "kind": "irc",
-        "content": format!("Queued chat send as {}", echo.user),
+        "content": format!("Local bot message queued as {} (Twitch posting disabled)", echo.user),
         "timestamp": chrono::Utc::now().to_rfc3339()
     }));
     Ok(())
@@ -1954,6 +2410,9 @@ pub async fn set_lurk_mode(state: tauri::State<'_, AppState>, enabled: bool) -> 
 pub async fn search_web(state: tauri::State<'_, AppState>, query: String) -> Result<String, String> {
     let _permit = acquire_search_permit(&state.0).await?;
     let search_cfg = state.0.config.read().search.clone();
+    if !search_cfg.enabled {
+        return Ok("Web search is disabled in Settings. Enable Search to use web search commands.".to_string());
+    }
     map_err(state.0.search.search(&search_cfg, &query).await)
 }
 
@@ -2043,22 +2502,24 @@ pub async fn clear_memory(state: tauri::State<'_, AppState>) -> Result<(), Strin
 
 #[tauri::command]
 pub async fn transcribe_local_audio(
+    app_handle: AppHandle,
     state: tauri::State<'_, AppState>,
     base64_audio: String,
     mime_type: String,
 ) -> Result<String, String> {
-    let _permit = acquire_task_permit(&state.0).await?;
-    let cfg = state.0.config.read().voice.clone();
+    let _permit = acquire_stt_permit(&state.0).await?;
+    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     map_err(stt::transcribe_base64_audio(&cfg, &base64_audio, &mime_type).await)
 }
 
 #[tauri::command]
 pub async fn transcribe_mic_chunk(
+    app_handle: AppHandle,
     state: tauri::State<'_, AppState>,
     duration_ms: u64,
 ) -> Result<String, String> {
-    let _permit = acquire_task_permit(&state.0).await?;
-    let cfg = state.0.config.read().voice.clone();
+    let _permit = acquire_stt_permit(&state.0).await?;
+    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     let audio_b64 = map_err(native_mic::capture_wav_base64(duration_ms).await)?;
     map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)
 }
@@ -2072,7 +2533,9 @@ pub async fn handle_voice_command(
     match parsed {
         VoiceCommand::Search(query) => {
             let _permit = acquire_search_permit(&state.0).await?;
-            let search_cfg = state.0.config.read().search.clone();
+            let mut search_cfg = state.0.config.read().search.clone();
+            // Keep voice command search consistent with conversational search behavior.
+            search_cfg.enabled = true;
             let result = map_err(state.0.search.search(&search_cfg, &query).await)?;
             Ok(format!("Search result: {result}"))
         }
@@ -2082,8 +2545,10 @@ pub async fn handle_voice_command(
             Ok(format!("Opened: {url}"))
         }
         VoiceCommand::Reply(text) => {
-            map_err(state.0.twitch.send_message(text.clone()).await)?;
-            Ok("Reply sent to chat.".to_string())
+            Ok(format!(
+                "Twitch posting is disabled. Local reply only: {}",
+                text.trim()
+            ))
         }
         VoiceCommand::SwitchModel(model) => {
             {
@@ -2141,6 +2606,7 @@ pub async fn submit_streamer_prompt(
         timestamp: chrono::Utc::now().to_rfc3339(),
         is_bot: false,
     };
+    // Local streamer prompts stay local; do not send to Twitch chat.
     let _ = app_handle.emit("chat_message", &chat);
     map_err(
         state

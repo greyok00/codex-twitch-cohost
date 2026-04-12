@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
-import type { AppStatus, AuthSessions, AvatarImage, ChatMessage, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings } from '../types';
+import type { AppStatus, AuthSessions, AvatarImage, ChatMessage, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceRuntimeReport } from '../types';
 import { authSessionsStore, botLogStore, chatStore, diagnosticsStore, errorBannerStore, eventStore, personalityStore, selfTestReportStore, statusStore } from '../stores/app';
 
 let runtimeTtsVoiceName: string | null = null;
@@ -27,6 +27,16 @@ export async function loadAuthSessions(): Promise<void> {
 
 export async function clearAuthSessions(): Promise<void> {
   await invoke('clear_auth_sessions');
+  await loadAuthSessions();
+}
+
+export async function clearBotSession(): Promise<void> {
+  await invoke('clear_bot_session');
+  await loadAuthSessions();
+}
+
+export async function clearStreamerSession(): Promise<void> {
+  await invoke('clear_streamer_session');
   await loadAuthSessions();
 }
 
@@ -163,6 +173,10 @@ export async function getTtsVoice(): Promise<TtsVoiceSettings> {
   return invoke<TtsVoiceSettings>('get_tts_voice');
 }
 
+export async function verifyVoiceRuntime(): Promise<VoiceRuntimeReport> {
+  return invoke<VoiceRuntimeReport>('verify_voice_runtime');
+}
+
 export async function setTtsVoice(voiceName: string | null): Promise<void> {
   await invoke('set_tts_voice', { voiceName });
   runtimeTtsVoiceName = voiceName;
@@ -173,8 +187,8 @@ export async function setTtsVolume(volumePercent: number): Promise<void> {
   runtimeTtsVolume = Math.max(0, Math.min(100, volumePercent));
 }
 
-export async function synthesizeTtsCloud(text: string): Promise<string> {
-  return invoke<string>('synthesize_tts_cloud', { text });
+export async function synthesizeTtsCloud(text: string, voiceName: string | null = null): Promise<string> {
+  return invoke<string>('synthesize_tts_cloud', { text, voiceName });
 }
 
 export async function saveAvatarImage(dataUrl: string, fileName: string | null): Promise<AvatarImage> {
@@ -206,6 +220,7 @@ export async function registerEventListeners(): Promise<void> {
     let text = (input || '').trim();
     if (!text) return '';
     text = text
+      .replace(/\([^)]{1,120}\)/g, ' ')
       .replace(/\*[^*]{1,120}\*/g, ' ')
       .replace(/_[^_]{1,120}_/g, ' ')
       .replace(/```[\s\S]*?```/g, ' ')
@@ -217,24 +232,31 @@ export async function registerEventListeners(): Promise<void> {
       .replace(/\bhttps?:\/\/\S+/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+    text = text
+      .split('')
+      .map((ch) => (/^[a-z0-9 .,!?'-]$/i.test(ch) ? ch : ' '))
+      .join('')
+      .replace(/\s+/g, ' ')
+      .trim();
     return text;
   }
 
   async function speakBotText(text: string) {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const status = get(statusStore);
-    if (!status.voiceEnabled) return;
-    if ((window as unknown as { __cohost_mic_live?: boolean }).__cohost_mic_live) return;
+    const runtime = window as unknown as { __cohost_tts_speaking?: boolean };
     // Expose speaking state to mic capture loop so it can avoid feedback loops.
-    (window as unknown as { __cohost_tts_speaking?: boolean }).__cohost_tts_speaking = true;
+    runtime.__cohost_tts_speaking = true;
     const clean = normalizeForSpeech(text);
-    if (!clean) return;
+    if (!clean) {
+      runtime.__cohost_tts_speaking = false;
+      return;
+    }
     avatarChannel?.postMessage({ type: 'speak_start', text: clean, ts: Date.now() });
     const liveVolume = runtimeTtsVolume ?? ttsVolume;
     const liveVoice = runtimeTtsVoiceName ?? ttsVoiceName;
 
     try {
-      const dataUrl = await synthesizeTtsCloud(clean);
+      const dataUrl = await synthesizeTtsCloud(clean, liveVoice && liveVoice !== 'auto' ? liveVoice : null);
       await new Promise<void>((resolve) => {
         const audio = new Audio(dataUrl);
         audio.volume = Math.max(0, Math.min(1, liveVolume / 100));
@@ -242,7 +264,7 @@ export async function registerEventListeners(): Promise<void> {
         audio.onerror = () => resolve();
         void audio.play().catch(() => resolve());
       });
-      (window as unknown as { __cohost_tts_speaking?: boolean }).__cohost_tts_speaking = false;
+      runtime.__cohost_tts_speaking = false;
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
       return;
     } catch {
@@ -284,11 +306,11 @@ export async function registerEventListeners(): Promise<void> {
     utterance.rate = 0.97;
     utterance.pitch = 1.02;
     utterance.onend = () => {
-      (window as unknown as { __cohost_tts_speaking?: boolean }).__cohost_tts_speaking = false;
+      runtime.__cohost_tts_speaking = false;
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
     };
     utterance.onerror = () => {
-      (window as unknown as { __cohost_tts_speaking?: boolean }).__cohost_tts_speaking = false;
+      runtime.__cohost_tts_speaking = false;
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
     };
     window.speechSynthesis.cancel();

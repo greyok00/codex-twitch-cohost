@@ -141,7 +141,7 @@ impl Default for AppConfig {
                     enabled: false,
                 }],
             },
-            personality_path: "./personality.json".to_string(),
+            personality_path: "personality.json".to_string(),
             voice: VoiceConfig {
                 enabled: false,
                 voice_name: Some("en_US-lessac-medium".to_string()),
@@ -204,6 +204,26 @@ impl AppConfig {
                 .join("config.json");
         }
         PathBuf::from("./config.json")
+    }
+
+    fn default_personality_path() -> PathBuf {
+        Self::user_config_path()
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("personality.json")
+    }
+
+    fn normalize_runtime_paths(&mut self) {
+        let current = self.personality_path.trim();
+        if current.is_empty() {
+            self.personality_path = Self::default_personality_path().to_string_lossy().to_string();
+            return;
+        }
+        let path = PathBuf::from(current);
+        if path.is_absolute() {
+            return;
+        }
+        self.personality_path = Self::default_personality_path().to_string_lossy().to_string();
     }
 
     fn ensure_parent_dir(path: &Path) -> AppResult<()> {
@@ -270,14 +290,17 @@ impl AppConfig {
             let raw = fs::read_to_string(&config_path).map_err(|e| {
                 AppError::Config(format!("failed reading {}: {e}", config_path.display()))
             })?;
-            let cfg: Self = serde_json::from_str(&raw).map_err(|e| {
+            let mut cfg: Self = serde_json::from_str(&raw).map_err(|e| {
                 AppError::Config(format!("invalid JSON in {}: {e}", config_path.display()))
             })?;
+            cfg.normalize_runtime_paths();
             cfg.validate()?;
             return Ok(cfg);
         }
 
-        Ok(Self::default())
+        let mut cfg = Self::default();
+        cfg.normalize_runtime_paths();
+        Ok(cfg)
     }
 
     pub fn save_to_disk(&self) -> AppResult<()> {
@@ -290,6 +313,7 @@ impl AppConfig {
             fallback.api_key = None;
         }
         safe.search.api_key = None;
+        safe.normalize_runtime_paths();
         let rendered = serde_json::to_string_pretty(&safe)?;
         let target = Self::write_target_path();
         Self::ensure_parent_dir(&target)?;
