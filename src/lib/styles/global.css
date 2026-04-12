@@ -138,7 +138,7 @@ body::before {
 
 .topbar-logo-only {
   justify-content: center;
-  padding: 4px 0 8px;
+  padding: 2px 0 10px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -152,8 +152,10 @@ body::before {
 }
 
 .top-logo {
-  width: 60px;
-  height: 60px;
+  width: clamp(320px, 52vw, 780px);
+  max-width: 100%;
+  height: auto;
+  max-height: 170px;
   object-fit: contain;
   display: block;
 }
