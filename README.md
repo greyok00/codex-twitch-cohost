@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/top-logo.png" alt="GreyOK logo" width="160" />
+  <img src="https://raw.githubusercontent.com/greyok00/codex-twitch-cohost/main/public/top-logo.png" alt="GreyOK logo" width="920" />
 </p>
 
 # GreyOK Twitch Co-Host
