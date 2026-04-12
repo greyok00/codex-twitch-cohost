@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { Tabs } from 'bits-ui';
-  import { autoConfigureSttFast, getSttConfig, loadAuthSessions, loadPersonality, loadStatus, registerEventListeners } from '../api/tauri';
+  import { autoConfigureSttFast, getSttConfig, loadAuthSessions, loadPersonality, loadStatus, openExternal, registerEventListeners } from '../api/tauri';
   import { errorBannerStore } from '../stores/app';
   import { authSessionsStore, diagnosticsStore, statusStore } from '../stores/app';
   import TwitchLoginCard from './TwitchLoginCard.svelte';
@@ -79,6 +79,20 @@
     if (!next) return;
     activePane = next as PaneId;
   }
+
+  const socialLinks = [
+    { label: 'GitHub', handle: '@greyok00', url: 'https://github.com/greyok00', icon: '/social/github.svg' },
+    { label: 'Twitch', handle: '@greyok__', url: 'https://twitch.tv/greyok__', icon: '/social/twitch.svg' },
+    { label: 'YouTube', handle: '@GreyOK_0', url: 'https://www.youtube.com/@GreyOK_0', icon: '/social/youtube.svg' }
+  ] as const;
+
+  async function openLink(url: string) {
+    try {
+      await openExternal(url);
+    } catch {
+      // no-op
+    }
+  }
 </script>
 
 <main class="app-shell">
@@ -146,8 +160,26 @@
       </Tabs.Content>
 
       <Tabs.Content value="about" class="tab-panel">
-        <h3>About</h3>
-        <p class="muted">Cross-platform Twitch co-host app built with Tauri + Svelte.</p>
+        <section class="card about-card">
+          <div class="about-head">
+            <img src="/top-logo.png" alt="GreyOK" class="about-logo" />
+            <div>
+              <h3>About GreyOK Co-Host</h3>
+              <p class="muted">Cross-platform Twitch co-host app built with Tauri + Svelte.</p>
+            </div>
+          </div>
+          <div class="social-list">
+            {#each socialLinks as link}
+              <button type="button" class="social-link" on:click={() => openLink(link.url)}>
+                <img src={link.icon} alt={link.label + ' logo'} class="social-icon" />
+                <span class="social-meta">
+                  <strong>{link.label}</strong>
+                  <small>{link.handle}</small>
+                </span>
+              </button>
+            {/each}
+          </div>
+        </section>
       </Tabs.Content>
     </section>
   </Tabs.Root>

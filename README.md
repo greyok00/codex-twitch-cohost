@@ -108,21 +108,30 @@ npm run tauri dev
 
 ## Commands (Chat/Voice)
 
-Prefix-supported commands (recommended prefix: `_`; aliases `!`, `.`, `/`):
+Chat command prefix: `_` (aliases `!`, `.`, `/` also work).
 
-- `_help`, `_commands`, `_menu`: show command guide
-- `_search <query>`: web search summary
-- `_say <text>`: local bot echo
-- `_model <name>`: switch active model
-- `_lurk on|off`: toggle lurk mode
-- `_todo add <minutes> <content>`: schedule one-time task
-- `_todo every <minutes> <content>`: schedule recurring task
-- `_todo list`: list tasks
-- `_todo done <id>`: mark task complete
-- `_todo run <id>`: run task immediately
-- `_agent ...`: alias for todo scheduling commands
+- `_help`, `_commands`, `_menu`
+- `_search <query>`
+- `_say <text>`
+- `_model <name>`
+- `_lurk on`
+- `_lurk off`
+- `_todo add <minutes> <content>`
+- `_todo every <minutes> <content>`
+- `_todo list`
+- `_todo done <id>`
+- `_todo run <id>`
+- `_agent ...` (alias for `_todo ...`)
 
-Voice command aliases also map into command behavior (for supported phrases).
+Voice command phrases currently supported:
+
+- `search for <query>`
+- `open <url>`
+- `reply to chat <text>`
+- `switch to model <name>`
+- `toggle lurk mode`
+- `toggle tts` / `read that aloud`
+- `summarize the last minute`
 
 ## Config + Data Locations
 
