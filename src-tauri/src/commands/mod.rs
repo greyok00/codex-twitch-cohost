@@ -226,25 +226,79 @@ fn detect_fast_whisper_binary(app_handle: Option<&AppHandle>) -> Option<String> 
     None
 }
 
+fn detect_vosk_python_runtime() -> Option<String> {
+    let candidates = if cfg!(target_os = "windows") {
+        vec![
+            PathBuf::from("./.venv-vosk/Scripts/python.exe"),
+            PathBuf::from("../.venv-vosk/Scripts/python.exe"),
+        ]
+    } else {
+        vec![
+            PathBuf::from("./.venv-vosk/bin/python"),
+            PathBuf::from("../.venv-vosk/bin/python"),
+        ]
+    };
+    first_existing(&candidates)
+}
+
+fn detect_vosk_model(app_handle: Option<&AppHandle>) -> Option<String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let model_names = [
+        "vosk-model-en-us-0.22",
+        "vosk-model-en-us-0.22-lgraph",
+        "vosk-model-small-en-us-0.15",
+    ];
+    if let Some(app) = app_handle {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            for name in model_names {
+                candidates.push(resource_dir.join("assets").join("vosk").join(name));
+                candidates.push(resource_dir.join("vosk").join(name));
+            }
+        }
+        if let Ok(app_data) = app.path().app_data_dir() {
+            for name in model_names {
+                candidates.push(app_data.join("models").join("vosk").join(name));
+            }
+        }
+    }
+    for name in model_names {
+        candidates.push(PathBuf::from("./src-tauri/assets/vosk").join(name));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        for name in model_names {
+            candidates.push(PathBuf::from(&home).join(".cache").join("vosk").join(name));
+            candidates.push(PathBuf::from(&home).join("models").join("vosk").join(name));
+        }
+    }
+    candidates
+        .into_iter()
+        .find(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+fn is_vosk_backend_name(value: &str) -> bool {
+    matches!(value.trim(), "vosk" | "vosk-python")
+}
+
 fn detect_fast_whisper_model(app_handle: Option<&AppHandle>) -> Option<String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(app) = app_handle {
         if let Ok(resource_dir) = app.path().resource_dir() {
-            candidates.push(resource_dir.join("assets").join("whisper").join("ggml-base.en.bin"));
             candidates.push(resource_dir.join("assets").join("whisper").join("ggml-tiny.en.bin"));
+            candidates.push(resource_dir.join("assets").join("whisper").join("ggml-base.en.bin"));
             candidates.push(resource_dir.join("assets").join("whisper").join("ggml-small.en.bin"));
-            candidates.push(resource_dir.join("whisper").join("ggml-base.en.bin"));
             candidates.push(resource_dir.join("whisper").join("ggml-tiny.en.bin"));
+            candidates.push(resource_dir.join("whisper").join("ggml-base.en.bin"));
             candidates.push(resource_dir.join("whisper").join("ggml-small.en.bin"));
             if cfg!(target_os = "windows") {
-                candidates.push(resource_dir.join("assets").join("whisper-win").join("ggml-base.en.bin"));
                 candidates.push(resource_dir.join("assets").join("whisper-win").join("ggml-tiny.en.bin"));
+                candidates.push(resource_dir.join("assets").join("whisper-win").join("ggml-base.en.bin"));
             } else if cfg!(target_os = "macos") {
-                candidates.push(resource_dir.join("assets").join("whisper-macos").join("ggml-base.en.bin"));
                 candidates.push(resource_dir.join("assets").join("whisper-macos").join("ggml-tiny.en.bin"));
+                candidates.push(resource_dir.join("assets").join("whisper-macos").join("ggml-base.en.bin"));
             } else {
-                candidates.push(resource_dir.join("assets").join("whisper-linux").join("ggml-base.en.bin"));
                 candidates.push(resource_dir.join("assets").join("whisper-linux").join("ggml-tiny.en.bin"));
+                candidates.push(resource_dir.join("assets").join("whisper-linux").join("ggml-base.en.bin"));
             }
         }
         if let Ok(app_data) = app.path().app_data_dir() {
@@ -275,10 +329,14 @@ fn detect_fast_whisper_model(app_handle: Option<&AppHandle>) -> Option<String> {
                 .join("whisper.cpp")
                 .join("ggml-small.en.bin"),
         );
+        candidates.push(PathBuf::from(&home).join("models").join("ggml-tiny.en.bin"));
         candidates.push(PathBuf::from(&home).join("models").join("ggml-base.en.bin"));
+        candidates.push(PathBuf::from(&home).join("models").join("whisper").join("ggml-tiny.en.bin"));
         candidates.push(PathBuf::from(&home).join("models").join("whisper").join("ggml-base.en.bin"));
     }
+    candidates.push(PathBuf::from("./models/ggml-tiny.en.bin"));
     candidates.push(PathBuf::from("./models/ggml-base.en.bin"));
+    candidates.push(PathBuf::from("./models/whisper/ggml-tiny.en.bin"));
     candidates.push(PathBuf::from("./models/whisper/ggml-base.en.bin"));
     first_existing(&candidates)
 }
@@ -290,6 +348,9 @@ fn is_path_like(binary: &str) -> bool {
 fn can_execute_binary(binary: &str) -> bool {
     if binary.trim().is_empty() {
         return false;
+    }
+    if is_vosk_backend_name(binary) {
+        return detect_vosk_python_runtime().is_some();
     }
     if is_path_like(binary) {
         let path = PathBuf::from(binary);
@@ -318,19 +379,45 @@ async fn resolve_or_repair_stt_config(
     let mut cfg = shared.config.read().voice.clone();
     let mut changed = false;
 
+    if let (Some(_runtime), Some(model)) = (detect_vosk_python_runtime(), detect_vosk_model(Some(app_handle))) {
+        if !is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default())
+            || cfg.stt_model_path.as_deref() != Some(model.as_str())
+        {
+            cfg.stt_binary_path = Some("vosk".to_string());
+            cfg.stt_model_path = Some(model);
+            changed = true;
+        }
+    }
+
     let current_bin = cfg.stt_binary_path.clone().unwrap_or_default();
+    let using_vosk = is_vosk_backend_name(&current_bin);
     let bin_ok = !current_bin.trim().is_empty() && can_execute_binary(current_bin.trim());
     if !bin_ok {
-        if let Some(bin) = detect_fast_whisper_binary(Some(app_handle)) {
+        if let Some(model) = detect_vosk_model(Some(app_handle)) {
+            if detect_vosk_python_runtime().is_some() {
+                cfg.stt_binary_path = Some("vosk".to_string());
+                cfg.stt_model_path = Some(model);
+                changed = true;
+            }
+        } else if let Some(bin) = detect_fast_whisper_binary(Some(app_handle)) {
             cfg.stt_binary_path = Some(bin);
             changed = true;
         }
     }
 
     let current_model = cfg.stt_model_path.clone().unwrap_or_default();
-    let model_ok = !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_file();
+    let model_ok = if using_vosk || is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
+        !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_dir()
+    } else {
+        !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_file()
+    };
     if !model_ok {
-        if let Some(model) = detect_fast_whisper_model(Some(app_handle)) {
+        if is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
+            if let Some(model) = detect_vosk_model(Some(app_handle)) {
+                cfg.stt_model_path = Some(model);
+                changed = true;
+            }
+        } else if let Some(model) = detect_fast_whisper_model(Some(app_handle)) {
             cfg.stt_model_path = Some(model);
             changed = true;
         }
@@ -343,7 +430,14 @@ async fn resolve_or_repair_stt_config(
         && cfg
             .stt_model_path
             .as_deref()
-            .is_some_and(|m| !m.trim().is_empty() && PathBuf::from(m.trim()).is_file());
+            .is_some_and(|m| {
+                let path = PathBuf::from(m.trim());
+                if is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
+                    path.is_dir()
+                } else {
+                    path.is_file()
+                }
+            });
 
     if ready && !cfg.stt_enabled {
         cfg.stt_enabled = true;
@@ -409,13 +503,63 @@ async fn synthesize_tts_cloud_with_voice(clean: &str, voice: &str) -> Result<Str
     let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
     let audio_path = tmp.path().join("edge_tts.mp3");
     let mut last_err: Option<String> = None;
+    let mut rate_pct: i32 = 8;
+    let mut pitch_hz: i32 = 10;
+    let lowered = clean.to_lowercase();
+    let exclamations = clean.matches('!').count() as i32;
+    let questions = clean.matches('?').count() as i32;
+    let ellipses = clean.matches("...").count() as i32;
+
+    let excited_hits = [
+        "oh my god", "omg", "wow", "holy", "yes", "yesss", "let's go", "lets go",
+        "baby", "daddy", "please", "come on", "right now", "good girl", "good boy",
+        "love that", "need that", "so good", "perfect"
+    ]
+    .iter()
+    .filter(|needle| lowered.contains(**needle))
+    .count() as i32;
+
+    let soft_hits = [
+        "sleepy", "soft", "slow", "calm", "easy", "gentle", "quiet", "hush", "whisper",
+        "sweet", "tender", "closer", "come here", "relax", "breathe", "mm", "mmm"
+    ]
+    .iter()
+    .filter(|needle| lowered.contains(**needle))
+    .count() as i32;
+
+    rate_pct += (exclamations * 3).min(9);
+    pitch_hz += (exclamations * 4).min(14);
+    pitch_hz += (questions * 3).min(9);
+
+    if excited_hits > 0 {
+        rate_pct += (excited_hits * 2).min(8);
+        pitch_hz += (excited_hits * 3).min(12);
+    }
+
+    if ellipses > 0 || soft_hits > 0 {
+        rate_pct -= (ellipses * 4).min(8) + (soft_hits * 2).min(10);
+        pitch_hz -= (soft_hits * 2).min(8);
+    }
+
+    if lowered.contains("serious") || lowered.contains("calm") {
+        rate_pct -= 4;
+        pitch_hz -= 1;
+    }
+
+    rate_pct = rate_pct.clamp(-18, 24);
+    pitch_hz = pitch_hz.clamp(-8, 28);
+
+    let rate_arg = format!("{rate_pct:+}%");
+    let pitch_arg = format!("{pitch_hz:+}Hz");
 
     for bin in edge_tts_candidates() {
         let mut cmd = Command::new(&bin);
         cmd.arg("--voice")
             .arg(voice)
             .arg("--rate")
-            .arg("+0%")
+            .arg(&rate_arg)
+            .arg("--pitch")
+            .arg(&pitch_arg)
             .arg("--text")
             .arg(clean)
             .arg("--write-media")
@@ -1052,6 +1196,9 @@ pub struct AuthSessionsView {
 pub struct BehaviorSettingsView {
     pub cohost_mode: bool,
     pub scheduled_messages_minutes: Option<u64>,
+    pub minimum_reply_interval_ms: Option<u64>,
+    pub post_bot_messages_to_twitch: bool,
+    pub topic_continuation_mode: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1060,6 +1207,15 @@ pub struct SttConfigView {
     pub stt_enabled: bool,
     pub stt_binary_path: Option<String>,
     pub stt_model_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicDebugView {
+    pub backend: String,
+    pub wav_path: String,
+    pub transcript: String,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1150,6 +1306,21 @@ pub struct DebugBundleResult {
     pub sections: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySnapshotView {
+    pub log_path: String,
+    pub recent: Vec<crate::memory::store::MemoryRecord>,
+    pub pinned: Vec<crate::memory::store::PinnedMemoryRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedMemoryInput {
+    pub label: String,
+    pub content: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct YoutubeRemarkRequest {
@@ -1211,21 +1382,21 @@ fn resolved_providers(state: &AppState) -> (crate::config::ProviderConfig, Vec<c
         if model.contains("qwen2.5vl")
             || model.contains("mistral-small:24b-instruct")
             || model.contains("qwen2.5:14b-instruct")
-            || (cloud && (model.contains("llama3.1:8b-instruct") || model.contains("llama3.3:70b-instruct")))
+            || (cloud && (model.contains("llama3.1:8b-instruct") || model.contains("llama3.3:70b-instruct") || model.contains("phi4:14b")))
         {
             if cloud {
                 p.model = "qwen3:8b".to_string();
             } else if p.name.eq_ignore_ascii_case("local-ollama") {
-                p.model = "llama3.1:8b-instruct".to_string();
+                p.model = "llama3.2:3b".to_string();
             } else {
-                p.model = "llama3.1:8b-instruct".to_string();
+                p.model = "llama3.2:3b".to_string();
             }
         }
         if p.model.trim().is_empty() {
             p.model = if cloud {
                 "qwen3:8b".to_string()
             } else {
-                "llama3.1:8b-instruct".to_string()
+                "llama3.2:3b".to_string()
             };
         }
         if p.name.eq_ignore_ascii_case("ollama-cloud") && p.timeout_ms < 18_000 {
@@ -1280,21 +1451,36 @@ async fn build_voice_runtime_report(
         let requested_bin = cfg.stt_binary_path.clone().unwrap_or_default();
         let resolved_bin = if can_execute_binary(&requested_bin) {
             Some(requested_bin)
+        } else if detect_vosk_python_runtime().is_some() && detect_vosk_model(Some(app_handle)).is_some() {
+            Some("vosk".to_string())
         } else {
             detect_fast_whisper_binary(Some(app_handle))
         };
         match resolved_bin.as_ref() {
+            Some(bin) if is_vosk_backend_name(bin) => push(
+                "STT backend",
+                "pass",
+                "Using local Vosk runtime via the project venv.".to_string(),
+            ),
             Some(bin) => push("STT binary", "pass", format!("Using STT binary: {bin}")),
             None => push(
-                "STT binary",
+                "STT backend",
                 "fail",
-                "No usable whisper executable found. Configure STT binary path or install whisper-cli.".to_string(),
+                "No usable local STT backend found. Install Vosk or whisper-cli.".to_string(),
             ),
         }
 
         let requested_model = cfg.stt_model_path.clone().unwrap_or_default();
-        let resolved_model = if !requested_model.trim().is_empty() && PathBuf::from(&requested_model).is_file() {
+        let resolved_model = if !requested_model.trim().is_empty()
+            && if is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
+                PathBuf::from(&requested_model).is_dir()
+            } else {
+                PathBuf::from(&requested_model).is_file()
+            }
+        {
             Some(requested_model)
+        } else if is_vosk_backend_name(resolved_bin.as_deref().unwrap_or_default()) {
+            detect_vosk_model(Some(app_handle))
         } else {
             detect_fast_whisper_model(Some(app_handle))
         };
@@ -1303,7 +1489,7 @@ async fn build_voice_runtime_report(
             None => push(
                 "STT model",
                 "fail",
-                "No whisper model found. Configure STT model path or run STT auto-configure.".to_string(),
+                "No local STT model found. Configure STT model path or run STT auto-configure.".to_string(),
             ),
         }
 
@@ -1325,7 +1511,11 @@ async fn build_voice_runtime_report(
                     push(
                         "STT process smoke test",
                         "pass",
-                        "Whisper process launched and returned a transcript payload.".to_string(),
+                        if is_vosk_backend_name(smoke_cfg.stt_binary_path.as_deref().unwrap_or_default()) {
+                            "Vosk runtime launched and returned a transcript payload.".to_string()
+                        } else {
+                            "Whisper process launched and returned a transcript payload.".to_string()
+                        },
                     );
                 }
                 Ok(Err(err)) => push("STT process smoke test", "fail", err.to_string()),
@@ -1449,13 +1639,15 @@ async fn build_service_health_report(
 
     let stt_requested_bin = cfg.voice.stt_binary_path.clone().unwrap_or_default();
     let stt_bin_available = if stt_requested_bin.trim().is_empty() {
-        detect_fast_whisper_binary(Some(app_handle)).is_some()
+        detect_vosk_python_runtime().is_some() || detect_fast_whisper_binary(Some(app_handle)).is_some()
     } else {
         can_execute_binary(&stt_requested_bin)
     };
     let stt_requested_model = cfg.voice.stt_model_path.clone().unwrap_or_default();
     let stt_model_available = if stt_requested_model.trim().is_empty() {
-        detect_fast_whisper_model(Some(app_handle)).is_some()
+        detect_vosk_model(Some(app_handle)).is_some() || detect_fast_whisper_model(Some(app_handle)).is_some()
+    } else if is_vosk_backend_name(&stt_requested_bin) {
+        PathBuf::from(&stt_requested_model).is_dir()
     } else {
         PathBuf::from(&stt_requested_model).is_file()
     };
@@ -1611,6 +1803,7 @@ async fn build_service_health_report(
         true,
         true,
         vec![
+            format!("Backend: {}", cfg.voice.stt_binary_path.clone().unwrap_or_else(|| "auto".to_string())),
             format!("Binary available: {}", stt_bin_available),
             format!("Model available: {}", stt_model_available),
         ],
@@ -1630,22 +1823,6 @@ async fn build_service_health_report(
             format!("edge-tts available: {}", tts_available),
         ],
     );
-    push_item(
-        &mut services,
-        "youtube_cohost",
-        "YouTube Co-Host",
-        true,
-        true,
-        true,
-        false,
-        true,
-        true,
-        vec![
-            "Embedded player and scheduling module compiled.".to_string(),
-            "Transcript/provider flow depends on runtime URL and caption availability.".to_string(),
-        ],
-    );
-
     let overall = if services.iter().any(|s| s.status == "fail") {
         "fail"
     } else if services.iter().any(|s| s.status == "warn") {
@@ -1696,6 +1873,9 @@ pub async fn get_behavior_settings(
     Ok(BehaviorSettingsView {
         cohost_mode: cfg.behavior.cohost_mode,
         scheduled_messages_minutes: cfg.behavior.scheduled_messages_minutes,
+        minimum_reply_interval_ms: Some(cfg.moderation.minimum_reply_interval_ms),
+        post_bot_messages_to_twitch: cfg.behavior.post_bot_messages_to_twitch,
+        topic_continuation_mode: cfg.behavior.topic_continuation_mode,
     })
 }
 
@@ -1704,10 +1884,22 @@ pub async fn set_behavior_settings(
     state: tauri::State<'_, AppState>,
     cohost_mode: bool,
     scheduled_messages_minutes: Option<u64>,
+    minimum_reply_interval_ms: Option<u64>,
+    post_bot_messages_to_twitch: Option<bool>,
+    topic_continuation_mode: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.0.config.write();
     cfg.behavior.cohost_mode = cohost_mode;
     cfg.behavior.scheduled_messages_minutes = scheduled_messages_minutes.filter(|v| *v > 0);
+    if let Some(value) = minimum_reply_interval_ms {
+        cfg.moderation.minimum_reply_interval_ms = value.clamp(1200, 60_000);
+    }
+    if let Some(value) = post_bot_messages_to_twitch {
+        cfg.behavior.post_bot_messages_to_twitch = value;
+    }
+    if let Some(value) = topic_continuation_mode {
+        cfg.behavior.topic_continuation_mode = value;
+    }
     cfg.save_to_disk().map_err(|e| e.to_string())
 }
 
@@ -1852,16 +2044,24 @@ pub async fn auto_configure_stt_fast(
 ) -> Result<SttAutoConfigResult, String> {
     let _permit = acquire_stt_permit(&state.0).await?;
     emit_stt_progress(&app_handle, "start", 3, "Starting Whisper setup...");
-    emit_stt_progress(&app_handle, "scan_binary", 8, "Checking Whisper executable...");
-    let detected_binary = match detect_fast_whisper_binary(Some(&app_handle)) {
-        Some(v) => Some(v),
-        None => try_provision_whisper_binary(&app_handle).await?,
+    emit_stt_progress(&app_handle, "scan_binary", 8, "Checking local STT runtime...");
+    let vosk_runtime = detect_vosk_python_runtime();
+    emit_stt_progress(&app_handle, "scan_model", 32, "Checking Vosk model...");
+    let vosk_model = detect_vosk_model(Some(&app_handle));
+    let (detected_binary, detected_model, backend_label) = if vosk_runtime.is_some() && vosk_model.is_some() {
+        (Some("vosk".to_string()), vosk_model, "Vosk")
+    } else {
+        emit_stt_progress(&app_handle, "fallback_whisper", 48, "Falling back to Whisper runtime...");
+        let detected_binary = match detect_fast_whisper_binary(Some(&app_handle)) {
+            Some(v) => Some(v),
+            None => try_provision_whisper_binary(&app_handle).await?,
+        };
+        let mut detected_model = detect_fast_whisper_model(Some(&app_handle));
+        if detected_model.is_none() {
+            detected_model = try_download_fast_whisper_model(&app_handle).await?;
+        }
+        (detected_binary, detected_model, "Whisper")
     };
-    emit_stt_progress(&app_handle, "scan_model", 58, "Checking Whisper model...");
-    let mut detected_model = detect_fast_whisper_model(Some(&app_handle));
-    if detected_model.is_none() {
-        detected_model = try_download_fast_whisper_model(&app_handle).await?;
-    }
     let mut cfg = state.0.config.write();
     cfg.voice.stt_binary_path = detected_binary.clone();
     cfg.voice.stt_model_path = detected_model.clone();
@@ -1870,14 +2070,16 @@ pub async fn auto_configure_stt_fast(
     cfg.save_to_disk().map_err(|e| e.to_string())?;
 
     let applied = cfg.voice.stt_enabled;
-    let message = if applied {
+    let message = if applied && backend_label == "Vosk" {
+        "Fast STT config applied (local Vosk model ready).".to_string()
+    } else if applied {
         "Fast STT config applied (model + whisper executable ready).".to_string()
     } else if detected_model.is_some() && detected_binary.is_none() {
-        "Whisper model is ready, but whisper executable was not found. Install whisper.cpp (whisper-cli) or set binary path in Advanced Paths.".to_string()
+        "STT model is ready, but no usable local STT runtime was found.".to_string()
     } else if detected_model.is_none() && detected_binary.is_some() {
-        "Whisper executable is ready, but model was not found/downloaded. Retry Install/Repair Whisper.".to_string()
+        "STT runtime is ready, but model was not found/downloaded. Retry auto-configure.".to_string()
     } else {
-        "Whisper setup incomplete: missing model and executable.".to_string()
+        "STT setup incomplete: missing model or runtime.".to_string()
     };
     emit_stt_progress(&app_handle, if applied { "done" } else { "incomplete" }, 100, message.clone());
 
@@ -2037,6 +2239,32 @@ pub async fn synthesize_tts_cloud(
         .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("auto"))
         .unwrap_or("en-US-JennyNeural");
     synthesize_tts_cloud_with_voice(clean, voice).await
+}
+
+#[tauri::command]
+pub async fn synthesize_tts_reaction(
+    state: tauri::State<'_, AppState>,
+    reaction: String,
+    voice_name: Option<String>,
+) -> Result<String, String> {
+    let _permit = acquire_tts_permit(&state.0).await?;
+    let voice = voice_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("auto"))
+        .unwrap_or("en-US-JennyNeural");
+    let lowered = reaction.trim().to_lowercase();
+    let cue = match lowered.as_str() {
+        "soft hum" => "mmm...".to_string(),
+        "thinking hum" => "hmm...".to_string(),
+        "surprised" => "oh!".to_string(),
+        "excited" => "ooh!".to_string(),
+        "delighted" => "ahh!".to_string(),
+        "playful" => "mm-hmm!".to_string(),
+        other if !other.is_empty() => other.to_string(),
+        _ => return Err("reaction is required".to_string()),
+    };
+    synthesize_tts_cloud_with_voice(&cue, voice).await
 }
 
 #[tauri::command]
@@ -3150,6 +3378,7 @@ pub async fn configure_cloud_only_mode(
             || m.contains("qwen2.5:14b-instruct")
             || m.contains("llama3.1:8b-instruct")
             || m.contains("llama3.3:70b-instruct")
+            || m.contains("phi4:14b")
         {
             "qwen3:8b".to_string()
         } else {
@@ -3173,7 +3402,7 @@ pub async fn configure_cloud_only_mode(
             cfg.providers.fallbacks.push(crate::config::ProviderConfig {
                 name: "local-ollama".to_string(),
                 base_url: "http://127.0.0.1:11434".to_string(),
-                model: "llama3.1:8b-instruct".to_string(),
+                model: "llama3.2:3b".to_string(),
                 api_key: None,
                 timeout_ms: 8000,
                 enabled: true,
@@ -3186,7 +3415,7 @@ pub async fn configure_cloud_only_mode(
                         fallback.base_url = "http://127.0.0.1:11434".to_string();
                     }
                     if fallback.model.trim().is_empty() || fallback.model.to_lowercase().contains("qwen2.5vl") {
-                        fallback.model = "llama3.1:8b-instruct".to_string();
+                        fallback.model = "llama3.2:3b".to_string();
                     }
                 }
             }
@@ -3527,6 +3756,51 @@ pub async fn clear_memory(state: tauri::State<'_, AppState>) -> Result<(), Strin
 }
 
 #[tauri::command]
+pub async fn get_memory_snapshot(state: tauri::State<'_, AppState>) -> Result<MemorySnapshotView, String> {
+    Ok(MemorySnapshotView {
+        log_path: state.0.memory.log_path(),
+        recent: map_err(state.0.memory.tail(40))?,
+        pinned: map_err(state.0.memory.list_pinned())?,
+    })
+}
+
+#[tauri::command]
+pub async fn open_memory_log(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let path = state.0.memory.log_path();
+    open::that_detached(&path).map_err(|e| format!("failed opening memory log {path}: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn upsert_pinned_memory(
+    state: tauri::State<'_, AppState>,
+    input: PinnedMemoryInput,
+) -> Result<crate::memory::store::PinnedMemoryRecord, String> {
+    let label = input.label.trim();
+    let content = input.content.trim();
+    if label.is_empty() {
+        return Err("Pinned memory label is required.".to_string());
+    }
+    if content.is_empty() {
+        return Err("Pinned memory content is required.".to_string());
+    }
+    map_err(state.0.memory.upsert_pinned(label, content))
+}
+
+#[tauri::command]
+pub async fn delete_pinned_memory(
+    state: tauri::State<'_, AppState>,
+    label: String,
+) -> Result<(), String> {
+    let clean = label.trim();
+    if clean.is_empty() {
+        return Err("Pinned memory label is required.".to_string());
+    }
+    let _ = map_err(state.0.memory.delete_pinned(clean))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn transcribe_local_audio(
     app_handle: AppHandle,
     state: tauri::State<'_, AppState>,
@@ -3548,6 +3822,24 @@ pub async fn transcribe_mic_chunk(
     let audio_b64 = map_err(native_mic::capture_wav_base64(duration_ms).await)?;
     let _permit = acquire_stt_permit(&state.0).await?;
     map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)
+}
+
+#[tauri::command]
+pub async fn capture_mic_debug(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    duration_ms: u64,
+) -> Result<MicDebugView, String> {
+    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
+    let (audio_b64, debug) = map_err(native_mic::capture_wav_base64_with_debug(duration_ms).await)?;
+    let _permit = acquire_stt_permit(&state.0).await?;
+    let transcript = map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)?;
+    Ok(MicDebugView {
+        backend: debug.backend,
+        wav_path: debug.wav_path,
+        transcript,
+        duration_ms: debug.duration_ms,
+    })
 }
 
 #[tauri::command]

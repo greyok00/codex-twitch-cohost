@@ -77,10 +77,16 @@ pub fn run() {
             commands::get_personality_profile,
             commands::set_personality_profile,
             commands::clear_memory,
+            commands::get_memory_snapshot,
+            commands::open_memory_log,
+            commands::upsert_pinned_memory,
+            commands::delete_pinned_memory,
             commands::transcribe_local_audio,
             commands::transcribe_mic_chunk,
+            commands::capture_mic_debug,
             commands::handle_voice_command,
             commands::submit_streamer_prompt,
+            commands::synthesize_tts_reaction,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

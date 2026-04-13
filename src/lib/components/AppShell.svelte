@@ -10,7 +10,6 @@
   import MemoryPanel from './MemoryPanel.svelte';
   import VoicePanel from './VoicePanel.svelte';
   import AvatarPanel from './AvatarPanel.svelte';
-  import YoutubeCohostPanel from './YoutubeCohostPanel.svelte';
 
   type PaneId = 'auth' | 'cloud' | 'personality' | 'voice' | 'avatar' | 'memory' | 'about';
 
@@ -89,8 +88,9 @@
 
 <main class="app-shell">
   <section class="chat-wrap">
-    <SessionChatPanel />
-    <YoutubeCohostPanel compact={true} />
+    <div class="session-surface">
+      <SessionChatPanel />
+    </div>
   </section>
 
   <section class="layout">
@@ -122,9 +122,9 @@
       {:else if activePane === 'personality'}
         <PersonalityEditor />
       {:else if activePane === 'voice'}
-        <VoicePanel aiReady={aiReady} chatReady={chatReady} />
+        <VoicePanel />
       {:else if activePane === 'avatar'}
-        <AvatarPanel aiReady={aiReady} chatReady={chatReady} />
+        <AvatarPanel />
       {:else if activePane === 'memory'}
         <MemoryPanel />
       {:else}

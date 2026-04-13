@@ -4,9 +4,12 @@ node_modules
 dist
 .vite
 .venv-edge-tts
+.venv-vosk
 *.log
 .env
+src-tauri/assets/vosk
 src-tauri/target
+src-tauri/src-tauri
 src-tauri/.cargo
 *.db
 codex-twitch-cohost-source-final*.tar.gz

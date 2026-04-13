@@ -32,7 +32,7 @@ fn normalize_provider_model(provider: &mut ProviderConfig) {
         provider.model = if cloud {
             "qwen3:8b".to_string()
         } else {
-            "llama3.1:8b-instruct".to_string()
+            "llama3.2:3b".to_string()
         };
         return;
     }
@@ -42,11 +42,12 @@ fn normalize_provider_model(provider: &mut ProviderConfig) {
             || model.contains("qwen2.5:14b-instruct")
             || model.contains("llama3.1:8b-instruct")
             || model.contains("llama3.3:70b-instruct")
+            || model.contains("phi4:14b")
         {
             provider.model = "qwen3:8b".to_string();
         }
     } else if model.contains("qwen2.5vl") {
-        provider.model = "llama3.1:8b-instruct".to_string();
+        provider.model = "llama3.2:3b".to_string();
     }
 }
 
@@ -254,11 +255,22 @@ fn has_recent_bot_reply(state: &SharedState, text: &str) -> bool {
     if normalized.is_empty() {
         return false;
     }
-    state
-        .recent_bot_replies
-        .read()
-        .iter()
-        .any(|v| v == &normalized)
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    state.recent_bot_replies.read().iter().any(|v| {
+        if v == &normalized {
+            return true;
+        }
+        if normalized.len() > 24 && (normalized.contains(v) || v.contains(&normalized)) {
+            return true;
+        }
+        let other = v.split_whitespace().collect::<Vec<_>>();
+        if tokens.len() < 4 || other.len() < 4 {
+            return false;
+        }
+        let overlap = tokens.iter().filter(|tok| other.contains(tok)).count();
+        let base = tokens.len().min(other.len());
+        overlap * 100 / base >= 72
+    })
 }
 
 fn remember_bot_reply(state: &SharedState, text: &str) {
@@ -271,6 +283,375 @@ fn remember_bot_reply(state: &SharedState, text: &str) {
     while q.len() > 60 {
         q.pop_back();
     }
+}
+
+fn clean_fact_fragment(input: &str) -> String {
+    input.trim()
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '.' | ',' | '!' | '?' | ':' | ';'))
+        .split(|c| matches!(c, '\n' | '\r'))
+        .next()
+        .unwrap_or_default()
+        .split(" and ")
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(140)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn clean_identity_label(input: &str) -> String {
+    let mut out = clean_fact_fragment(input);
+    for suffix in [
+        " from now on",
+        " when you talk to me",
+        " when we talk",
+        " in chat",
+        " on stream",
+        " going forward",
+        " please",
+    ] {
+        loop {
+            let lowered = out.to_lowercase();
+            if lowered.ends_with(suffix) {
+                let new_len = out.len().saturating_sub(suffix.len());
+                out.truncate(new_len);
+                out = out.trim().trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | '.' | '!' | '?')).to_string();
+            } else {
+                break;
+            }
+        }
+    }
+    out.split_whitespace()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+fn extract_after_phrase(text: &str, phrases: &[&str]) -> Option<String> {
+    let lowered = text.to_lowercase();
+    for phrase in phrases {
+        if let Some(idx) = lowered.find(phrase) {
+            let fragment = &text[idx + phrase.len()..];
+            let clean = clean_fact_fragment(fragment);
+            if !clean.is_empty() {
+                return Some(clean);
+            }
+        }
+    }
+    None
+}
+
+fn has_recent_memory_fact(state: &SharedState, kind: &str, content: &str) -> bool {
+    let target = normalize_for_dedupe(content);
+    if target.is_empty() {
+        return false;
+    }
+    state
+        .memory
+        .recent(80)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|rec| rec.kind == kind)
+        .any(|rec| normalize_for_dedupe(&rec.content) == target)
+}
+
+fn append_memory_fact(state: &SharedState, kind: &str, user: &str, content: String) {
+    let clean = content.trim();
+    if clean.is_empty() || has_recent_memory_fact(state, kind, clean) {
+        return;
+    }
+    let _ = state.memory.append(kind, Some(user), clean);
+}
+
+fn same_user(a: &str, b: &str) -> bool {
+    normalize_for_dedupe(a) == normalize_for_dedupe(b)
+}
+
+fn remember_bot_identity_facts(state: &SharedState, content: &str) {
+    let lowered = content.to_lowercase();
+    if let Some(pref) = extract_after_phrase(content, &["i like ", "i love ", "i prefer ", "my favorite "]) {
+        if lowered.starts_with("i like ")
+            || lowered.starts_with("i love ")
+            || lowered.starts_with("i prefer ")
+            || lowered.starts_with("my favorite ")
+        {
+            append_memory_fact(state, "bot_preference", "bot", format!("Bot likes {pref}."));
+        }
+    }
+    if let Some(dislike) = extract_after_phrase(content, &["i hate ", "i dislike ", "i do not like "]) {
+        if lowered.starts_with("i hate ")
+            || lowered.starts_with("i dislike ")
+            || lowered.starts_with("i do not like ")
+        {
+            append_memory_fact(state, "bot_preference", "bot", format!("Bot dislikes {dislike}."));
+        }
+    }
+}
+
+fn remember_salient_chat_facts(state: &SharedState, chat: &ChatMessage) {
+    let lowered = chat.content.to_lowercase();
+    let user = chat.user.trim();
+    if user.is_empty() {
+        return;
+    }
+
+    if let Some(name) = extract_after_phrase(&chat.content, &["my name is "]) {
+        let name = clean_identity_label(&name);
+        if !name.is_empty() {
+            append_memory_fact(state, "profile_fact", user, format!("{user} says their preferred name is {name}."));
+        }
+    }
+    if let Some(name) = extract_after_phrase(
+        &chat.content,
+        &[
+            "call me ",
+            "you can call me ",
+            "refer to me as ",
+            "when you talk to me call me ",
+            "i want you to call me ",
+            "please call me ",
+            "my nickname is ",
+            "my pet name is ",
+            "my title is ",
+        ],
+    ) {
+        let name = clean_identity_label(&name);
+        if !name.is_empty() {
+            append_memory_fact(state, "address_preference", user, format!("Address {user} as {name}."));
+        }
+    }
+    if let Some(pref) = extract_after_phrase(&chat.content, &["i like ", "i love ", "i prefer ", "my favorite "]) {
+        append_memory_fact(state, "preference", user, format!("{user} likes {pref}."));
+    }
+    if let Some(dislike) = extract_after_phrase(&chat.content, &["i hate ", "i dislike ", "i do not like "]) {
+        append_memory_fact(state, "preference", user, format!("{user} dislikes {dislike}."));
+    }
+    if let Some(goal) = extract_after_phrase(&chat.content, &["i want ", "i need ", "i'm trying to ", "i am trying to "]) {
+        append_memory_fact(state, "goal", user, format!("{user} wants or needs {goal}."));
+    }
+    if let Some(memory) = extract_after_phrase(&chat.content, &["remember ", "please remember "]) {
+        append_memory_fact(state, "explicit_memory", user, format!("{user} explicitly asked to remember: {memory}."));
+    }
+    if let Some(memory) = extract_after_phrase(&chat.content, &["don't forget ", "do not forget ", "always remember "]) {
+        append_memory_fact(state, "explicit_memory", user, format!("{user} explicitly wants remembered: {memory}."));
+    }
+    if let Some(dynamic) = extract_after_phrase(
+        &chat.content,
+        &["you are my ", "you're my ", "we are ", "our dynamic is ", "i'm your ", "i am your "],
+    ) {
+        let dynamic = clean_identity_label(&dynamic);
+        if !dynamic.is_empty() {
+            append_memory_fact(state, "relationship_state", user, format!("Relationship framing from {user}: {dynamic}."));
+        }
+    }
+    if let Some(role) = extract_after_phrase(
+        &chat.content,
+        &["call me your ", "treat me like your ", "i'm your ", "i am your "],
+    ) {
+        let role = clean_identity_label(&role);
+        if !role.is_empty() {
+            append_memory_fact(state, "role_label", user, format!("{user} wants role framing around {role}."));
+        }
+    }
+    if let Some(pronouns) = extract_after_phrase(&chat.content, &["my pronouns are "]) {
+        append_memory_fact(state, "profile_fact", user, format!("{user}'s pronouns are {pronouns}."));
+    }
+
+    if lowered.contains("usb mic")
+        || lowered.contains("headset")
+        || lowered.contains("microphone")
+        || lowered.contains("audio interface")
+        || lowered.contains("not streaming")
+        || lowered.contains("local chat")
+        || lowered.contains("twitch chat")
+    {
+        append_memory_fact(state, "setup_fact", user, format!("{user} setup note: {}", clean_fact_fragment(&chat.content)));
+    }
+
+    if lowered.starts_with("actually ") || lowered.starts_with("no,") || lowered.starts_with("no ") || lowered.contains("i mean ") {
+        append_memory_fact(state, "correction", user, format!("{user} correction: {}", clean_fact_fragment(&chat.content)));
+    }
+
+    let repeated = state
+        .recent_chat
+        .read()
+        .iter()
+        .take(12)
+        .filter(|item| item.user.eq_ignore_ascii_case(&chat.user))
+        .filter(|item| normalize_for_dedupe(&item.content) == normalize_for_dedupe(&chat.content))
+        .count();
+    if repeated >= 2 && chat.content.trim().len() >= 20 {
+        append_memory_fact(
+            state,
+            "priority_fact",
+            user,
+            format!("{user} repeated this and it is likely important: {}", clean_fact_fragment(&chat.content)),
+        );
+    }
+}
+
+fn build_memory_context(state: &SharedState, max_items: usize) -> Vec<String> {
+    let mut pinned = state
+        .memory
+        .list_pinned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| format!("[pinned:{}] {}", item.label, item.content))
+        .collect::<Vec<_>>();
+    let records = state.memory.recent(64).unwrap_or_default();
+    let mut priority = Vec::new();
+    let mut recent = Vec::new();
+    for m in records {
+        let user = m.user.unwrap_or_default();
+        let line = if user.is_empty() {
+            format!("[{}] {}", m.kind, m.content)
+        } else {
+            format!("[{}:{}] {}", m.kind, user, m.content)
+        };
+        match m.kind.as_str() {
+            "story_state" | "relationship_state" | "role_label" | "address_preference" | "explicit_memory" | "profile_fact" | "preference" | "goal" | "setup_fact" | "correction" | "priority_fact" | "bot_preference" => priority.push(line),
+            _ => recent.push(line),
+        }
+    }
+    pinned.extend(priority);
+    pinned.extend(recent);
+    pinned.truncate(max_items);
+    pinned
+}
+
+fn build_user_memory_context(state: &SharedState, user: &str, max_items: usize) -> Vec<String> {
+    let mut pinned = state
+        .memory
+        .list_pinned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| format!("[pinned:{}] {}", item.label, item.content))
+        .collect::<Vec<_>>();
+    let records = state.memory.recent(96).unwrap_or_default();
+    let mut direct = Vec::new();
+    let mut other = Vec::new();
+    for m in records {
+        let Some(owner) = m.user.as_deref() else {
+            continue;
+        };
+        if !same_user(owner, user) {
+            continue;
+        }
+        let line = format!("[{}:{}] {}", m.kind, owner, m.content);
+        match m.kind.as_str() {
+            "address_preference" | "role_label" | "explicit_memory" | "profile_fact" | "relationship_state" | "correction" | "priority_fact" | "preference" | "goal" => direct.push(line),
+            _ => other.push(line),
+        }
+    }
+    pinned.extend(direct);
+    pinned.extend(other);
+    pinned.truncate(max_items);
+    pinned
+}
+
+fn recent_bot_story_context(state: &SharedState, max_items: usize) -> Vec<String> {
+    state
+        .memory
+        .recent(40)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.kind == "bot_reply" || m.kind == "story_state")
+        .take(max_items)
+        .map(|m| m.content)
+        .collect::<Vec<_>>()
+}
+
+fn looks_like_story_request(input: &str) -> bool {
+    let lowered = input.to_lowercase();
+    [
+        "tell me a story",
+        "continue the story",
+        "continue this",
+        "write a story",
+        "make up a story",
+        "romantic conversation",
+        "romance scene",
+        "romantic scene",
+        "love scene",
+        "seduce",
+        "slow burn",
+        "roleplay",
+        "story mode",
+        "sex story",
+        "erotic story",
+        "nsfw story",
+        "dirty story",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn normalize_repetitive_question_reply(text: &str, story_mode: bool, latest_input: &str) -> String {
+    let mut out = text.trim().to_string();
+    if out.is_empty() {
+        return out;
+    }
+    let question_count = out.matches('?').count();
+    let latest_is_question = latest_input.trim().ends_with('?');
+
+    if story_mode && question_count > 0 {
+        out = out.replace('?', ".");
+    } else if !latest_is_question && question_count > 0 {
+        if let Some(last) = out.rfind('?') {
+            out.truncate(last);
+            out = out.trim().trim_end_matches(|c: char| c == ',' || c == ';' || c == ':').to_string();
+            if !out.ends_with('.') && !out.ends_with('!') {
+                out.push('.');
+            }
+        }
+    }
+
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn stylize_reply_punctuation(text: &str) -> String {
+    let mut out = text.trim().to_string();
+    if out.is_empty() {
+        return out;
+    }
+
+    let lowered = out.to_lowercase();
+    let soft_hits = [
+        "sleepy", "soft", "slow", "easy", "gentle", "quiet", "hush", "whisper",
+        "sweet", "tender", "closer", "relax", "breathe", "mm", "mmm"
+    ]
+    .iter()
+    .filter(|needle| lowered.contains(**needle))
+    .count();
+
+    let excited_hits = [
+        "wow", "yes", "yesss", "holy", "damn", "baby", "daddy", "perfect", "love that",
+        "lets go", "let's go", "so good", "right now", "god"
+    ]
+    .iter()
+    .filter(|needle| lowered.contains(**needle))
+    .count();
+
+    out = out.trim_end_matches(|c: char| matches!(c, '.' | '?' | '!')).trim().to_string();
+    if out.is_empty() {
+        return out;
+    }
+
+    if soft_hits > 0 {
+        out.push_str("...");
+    } else if excited_hits > 0 {
+        out.push('!');
+    } else if out.split_whitespace().count() <= 5 {
+        out.push('!');
+    } else {
+        out.push('.');
+    }
+
+    out
 }
 
 fn fallback_event_reply(event: &EventMessage) -> String {
@@ -430,14 +811,16 @@ async fn process_chat_input(
     chat: ChatMessage,
     send_to_twitch: bool,
 ) {
+    let outbound_to_twitch = send_to_twitch || state.twitch.is_connected();
     if should_ignore_message(state, &chat) {
         return;
     }
     state.recent_chat.write().push_front(chat.clone());
-    while state.recent_chat.read().len() > 80 {
+    while state.recent_chat.read().len() > 120 {
         state.recent_chat.write().pop_back();
     }
     let _ = state.memory.append("chat", Some(&chat.user), &chat.content);
+    remember_salient_chat_facts(state, &chat);
 
     if let Some(command_input) = normalize_control_command_input(&chat.content) {
         let sender = chat.user.clone();
@@ -455,11 +838,6 @@ async fn process_chat_input(
     let force_reply = contains_chatbot_keyword(&chat.content)
         || (send_to_twitch && is_directly_addressed(state, &chat));
 
-    if !send_to_twitch && !force_reply && looks_unclear_input(&chat.content) {
-        send_bot_message(app, state, funny_clarification_prompt(), false);
-        return;
-    }
-
     if let Some(query) = extract_search_query(&chat.content) {
         let mut search_cfg = state.config.read().search.clone();
         // Conversation mode: allow direct search prompts without forcing settings toggles.
@@ -472,7 +850,7 @@ async fn process_chat_input(
         if clean.is_empty() {
             return;
         }
-        send_bot_message(app, state, clean, send_to_twitch);
+        send_bot_message(app, state, clean, outbound_to_twitch);
         return;
     }
 
@@ -492,8 +870,8 @@ async fn process_chat_input(
                 *c = c.saturating_add(1);
                 *c
             };
-            // Conversational cadence: respond at least once every few chat messages.
-            if n % 3 != 0 {
+            // Keep ambient Twitch chatter sparse unless directly invoked.
+            if n % 6 != 0 || chat.content.trim().len() < 18 {
                 return;
             }
         }
@@ -527,13 +905,9 @@ async fn process_chat_input(
         }
     }
 
-    let memory = state
-        .memory
-        .recent(config.memory.max_recent_messages.min(16))
-        .unwrap_or_default()
-        .into_iter()
-        .map(|m| m.content)
-        .collect::<Vec<_>>();
+    let memory = build_memory_context(state, config.memory.max_recent_messages.min(20));
+    let speaker_memory = build_user_memory_context(state, &chat.user, 10);
+    let recent_story = recent_bot_story_context(state, 6);
 
     let recent_chat = state.recent_chat.read().iter().cloned().collect::<Vec<_>>();
     let system_prompt = PersonalityEngine::build_prompt(
@@ -545,16 +919,42 @@ async fn process_chat_input(
         *state.voice_enabled.read(),
     );
 
+    let story_mode = looks_like_story_request(&chat.content);
+    let keep_talking_mode = config.behavior.topic_continuation_mode;
     let user_prompt = if send_to_twitch {
-        format!(
-            "Viewer {} said: {}\nAnswer the actual point of that line first. Reference one concrete detail from it. If the line is ambiguous, ask one short clarifying question instead of roasting. Keep it under 22 words and stay on topic.",
-            chat.user, chat.content
-        )
+        if story_mode {
+            format!(
+                "Viewer {} said: {}\nThis is a story or scene request. Continue it with concrete details and a strong voice. Use statements, not a list of questions. Keep it concise enough for chat, around 2 to 4 sentences, but still advance the scene.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
+                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+            )
+        } else if keep_talking_mode {
+            format!(
+                "Viewer {} said: {}\nKeep talking about the current subject. Stay on topic, make statements, develop the idea, and avoid question loops. Use recent memory and scene context if relevant. Reply in 2 or 3 short sentences and do not end with more than one brief question.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
+                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+            )
+        } else {
+            format!(
+                "Viewer {} said: {}\nAnswer the actual point of that line first. Make at least one grounded statement or observation before asking anything. Reference one concrete detail from it. Only ask a short clarifying question if it is truly needed. Keep it under 28 words and stay on topic.\nCurrent speaker memory:\n{}",
+                chat.user, chat.content, speaker_memory.join("\n")
+            )
+        }
     } else {
-        format!(
-            "Streamer {} said: {}\nReply in 1 or 2 conversational sentences under 36 words. Answer clearly, reference one concrete detail from what they said, and only joke if it improves the reply. If the transcript is partial, ask one short clarifying question tied to what you did hear.",
-            chat.user, chat.content
-        )
+        if story_mode {
+            format!(
+                "Streamer {} said: {}\nThis is a live local cohost exchange and the user wants an ongoing story, romance, or scene. Continue the scene instead of interrogating them. Use concrete sensory details, emotional continuity, and established context from recent chat and memory. Prefer statements over questions. Write 1 short paragraph or 3 to 6 sentences, and only ask a question if the user clearly invited choice or direction.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
+                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+            )
+        } else if keep_talking_mode {
+            format!(
+                "Streamer {} said: {}\nKeep talking about the same subject instead of resetting into another question. Develop the current topic with concrete observations, memory, and continuity. Prefer statements, reactions, and continuation over asking for clarification. Reply in 2 or 3 conversational sentences and only ask a question if absolutely necessary.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
+                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+            )
+        } else {
+            format!(
+                "Streamer {} said: {}\nThis is a live local cohost exchange. Reply in plain everyday language. Answer the literal latest line first. Only use recent chat or memory if it directly helps clarify the latest line. Do not invent scene details, weird metaphors, or theatrical phrasing. Reply in 1 or 2 conversational sentences under 42 words. Make a grounded statement first. Only ask a short plain clarification question if it is truly necessary.\nCurrent speaker memory:\n{}",
+                chat.user, chat.content, speaker_memory.join("\n")
+            )
+        }
     };
     let response = state
         .llm
@@ -569,6 +969,8 @@ async fn process_chat_input(
     match response {
         Ok(mut text) => {
             text = sanitize_bot_output(&text);
+            text = normalize_repetitive_question_reply(&text, story_mode || keep_talking_mode, &chat.content);
+            text = stylize_reply_punctuation(&text);
             text = text.chars().take(config.moderation.max_reply_chars).collect();
             if has_recent_bot_reply(state, &text) {
                 let retry_prompt = format!(
@@ -585,13 +987,30 @@ async fn process_chat_input(
                     .await
                 {
                     retried = sanitize_bot_output(&retried);
+                    retried = normalize_repetitive_question_reply(&retried, story_mode || keep_talking_mode, &chat.content);
+                    retried = stylize_reply_punctuation(&retried);
                     text = retried.chars().take(config.moderation.max_reply_chars).collect();
                 }
             }
-            if text.is_empty() {
+            if send_to_twitch && has_explicit_bot_mention(state, &chat.content.to_lowercase()) {
+                let mention = format!("@{}", chat.user.trim().trim_start_matches('@'));
+                if !text.to_lowercase().starts_with(&mention.to_lowercase()) {
+                    text = format!("{mention} {text}");
+                }
+            }
+            if text.is_empty() || has_recent_bot_reply(state, &text) {
                 return;
             }
-            send_bot_message(app, state, text, send_to_twitch);
+            remember_bot_identity_facts(state, &text);
+            if story_mode || keep_talking_mode {
+                append_memory_fact(
+                    state,
+                    "story_state",
+                    "bot",
+                    format!("Continuation after {} said '{}': {}", chat.user, clean_fact_fragment(&chat.content), text),
+                );
+            }
+            send_bot_message(app, state, text, outbound_to_twitch);
 
             if send_to_twitch {
                 let wait_ms = config.moderation.minimum_reply_interval_ms;
@@ -626,6 +1045,10 @@ fn is_directly_addressed(state: &SharedState, chat: &ChatMessage) -> bool {
     if content.starts_with("!ai ") || content.starts_with("@ai ") || has_wake_phrase(&content) {
         return true;
     }
+    has_explicit_bot_mention(state, &content)
+}
+
+fn has_explicit_bot_mention(state: &SharedState, content: &str) -> bool {
     let cfg = state.config.read().twitch.clone();
     let bot = cfg.bot_username.trim().trim_start_matches('#').to_lowercase();
     let channel = cfg.channel.trim().trim_start_matches('#').to_lowercase();
@@ -683,46 +1106,6 @@ fn contains_chatbot_keyword(input: &str) -> bool {
         .collect::<Vec<_>>()
         .join(" ");
     compact.contains("chatbot") || compact.contains("chat bot")
-}
-
-fn looks_unclear_input(input: &str) -> bool {
-    let text = input.trim();
-    if text.is_empty() {
-        return true;
-    }
-    let lower = text.to_lowercase();
-    if lower.contains("???") {
-        return true;
-    }
-    let words = lower
-        .split_whitespace()
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>();
-    let letters = lower.chars().filter(|c| c.is_ascii_alphabetic()).count();
-    let digits = lower.chars().filter(|c| c.is_ascii_digit()).count();
-    if letters + digits < 2 {
-        return true;
-    }
-    if words.len() <= 1 && letters < 4 && digits == 0 {
-        return true;
-    }
-    false
-}
-
-fn funny_clarification_prompt() -> String {
-    let mut rng = rand::thread_rng();
-    let options = [
-        "My brain lagged. Say that again slower so I can cook.",
-        "I heard half a sentence and a ghost. Hit me one more time.",
-        "That came through like cursed subtitles. Say it again for me.",
-        "My ears buffered at 240p. Repeat that and I got you.",
-        "I caught fragments, not the plot. Give me that line again.",
-    ];
-    options
-        .choose(&mut rng)
-        .copied()
-        .unwrap_or("I missed part of that. Repeat it once more?")
-        .to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -850,7 +1233,6 @@ fn load_pending_todos(state: &SharedState, max_scan: usize) -> Vec<ScheduledTodo
 }
 
 fn send_bot_message(app: &AppHandle, state: &SharedState, content: String, send_to_twitch: bool) {
-    let _ = send_to_twitch;
     let content = sanitize_bot_output(&content);
     if content.is_empty() {
         return;
@@ -859,7 +1241,10 @@ fn send_bot_message(app: &AppHandle, state: &SharedState, content: String, send_
         return;
     }
     remember_bot_reply(state, &content);
-    if state.twitch.is_connected() {
+    let allow_twitch_post = send_to_twitch
+        && state.twitch.is_connected()
+        && state.config.read().behavior.post_bot_messages_to_twitch;
+    if allow_twitch_post {
         let twitch = state.twitch.clone();
         let msg = content.clone();
         let app_clone = app.clone();
@@ -891,7 +1276,37 @@ fn send_bot_message(app: &AppHandle, state: &SharedState, content: String, send_
 }
 
 fn sanitize_bot_output(input: &str) -> String {
-    let mut text = input
+    let mut text = input.trim().to_string();
+    for prefix in [
+        "adjusts cape",
+        "adjusts cloak",
+        "adjusts hood",
+        "clears throat",
+        "sighs",
+        "laughs",
+        "chuckles",
+        "smirks",
+        "grins",
+        "shrugs",
+        "leans in",
+        "pauses",
+        "whispers",
+        "murmurs",
+        "stares",
+        "nods",
+        "gasps",
+        "facepalms",
+        "rolls eyes",
+    ] {
+        let lower = text.to_lowercase();
+        if lower.starts_with(prefix) {
+            text = text[prefix.len()..]
+                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | ':' | '-' | '.' | '!' | '?'))
+                .to_string();
+        }
+    }
+
+    text = text
         .replace("```", " ")
         .replace('`', " ")
         .replace('*', " ")
@@ -1076,32 +1491,40 @@ fn spawn_scheduled_messages(app: AppHandle, state: AppState) {
                 }
             }
 
-            let minutes = state
-                .0
-                .config
-                .read()
-                .behavior
-                .scheduled_messages_minutes
-                .unwrap_or(0);
-
-            if minutes == 0 {
-                next_checkin_at = None;
+            let cfg = state.0.config.read().clone();
+            let cadence = if cfg.behavior.cohost_mode {
+                Some(chrono::Duration::milliseconds(
+                    cfg.moderation.minimum_reply_interval_ms.max(8_000) as i64,
+                ))
             } else {
+                cfg.behavior
+                    .scheduled_messages_minutes
+                    .filter(|v| *v > 0)
+                    .map(|minutes| chrono::Duration::minutes(minutes as i64))
+            };
+
+            if let Some(cadence) = cadence {
                 if next_checkin_at.is_none() {
-                    next_checkin_at = Some(now + chrono::Duration::minutes(minutes as i64));
+                    next_checkin_at = Some(now + cadence);
                 }
                 if next_checkin_at.is_some_and(|at| now >= at) {
-                    if state.0.config.read().behavior.cohost_mode && !*state.0.lurk_mode.read() {
+                    if cfg.behavior.cohost_mode && !*state.0.lurk_mode.read() {
                         let _ = state
                             .0
                             .response_queue_tx
-                            .send(PipelineInput::Manual(
-                                "Quick check-in: hydrate, stretch, and tell chat what build we ship next.".to_string(),
-                            ))
+                            .send(PipelineInput::LocalChat(ChatMessage {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                user: "system".to_string(),
+                                content: "Auto cohost cue: say one short fresh line about what is happening right now, grounded in current chat and stream context, without repeating prior wording.".to_string(),
+                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                is_bot: false,
+                            }))
                             .await;
                     }
-                    next_checkin_at = Some(now + chrono::Duration::minutes(minutes as i64));
+                    next_checkin_at = Some(now + cadence);
                 }
+            } else {
+                next_checkin_at = None;
             }
 
             tokio::time::sleep(Duration::from_secs(15)).await;

@@ -12,8 +12,8 @@ const STORAGE_KEY = 'greyok-cohost-controls';
 
 const defaults: CohostControls = {
   modelMode: 'medium',
-  autonomousReplies: true,
-  videoRemarksPerMinute: 1.2
+  autonomousReplies: false,
+  videoRemarksPerMinute: 0.6
 };
 
 function loadInitial(): CohostControls {

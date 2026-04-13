@@ -101,6 +101,14 @@ pub struct BehaviorConfig {
     pub cohost_mode: bool,
     pub auto_greet: bool,
     pub scheduled_messages_minutes: Option<u64>,
+    #[serde(default = "default_post_bot_messages_to_twitch")]
+    pub post_bot_messages_to_twitch: bool,
+    #[serde(default)]
+    pub topic_continuation_mode: bool,
+}
+
+fn default_post_bot_messages_to_twitch() -> bool {
+    false
 }
 
 impl Default for AppConfig {
@@ -127,7 +135,7 @@ impl Default for AppConfig {
                 primary: ProviderConfig {
                     name: "local-ollama".to_string(),
                     base_url: "http://127.0.0.1:11434".to_string(),
-                    model: "llama3.1:8b-instruct".to_string(),
+                    model: "llama3.2:3b".to_string(),
                     api_key: None,
                     timeout_ms: 8000,
                     enabled: true,
@@ -152,12 +160,12 @@ impl Default for AppConfig {
                 speech_rate: Some(175),
                 allow_mic_commands: false,
                 stt_enabled: false,
-                stt_binary_path: Some("whisper-cli".to_string()),
+                stt_binary_path: Some("vosk".to_string()),
                 stt_model_path: None,
             },
             memory: MemoryConfig {
                 persist: true,
-                max_recent_messages: 40,
+                max_recent_messages: 120,
                 store_viewer_facts: true,
             },
             moderation: ModerationConfig {
@@ -180,6 +188,8 @@ impl Default for AppConfig {
                 cohost_mode: true,
                 auto_greet: true,
                 scheduled_messages_minutes: Some(15),
+                post_bot_messages_to_twitch: false,
+                topic_continuation_mode: false,
             },
         }
     }

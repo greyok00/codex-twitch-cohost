@@ -2,20 +2,12 @@
   import { onDestroy, onMount } from 'svelte';
   import { getSavedAvatarImage, saveAvatarImage } from '../api/tauri';
   import { errorBannerStore } from '../stores/app';
-  export let aiReady = false;
-  export let chatReady = false;
 
   let selectedName = '';
   let ready = false;
   let imageWidth = 560;
   let imageHeight = 760;
   let avatarChannel: BroadcastChannel | null = null;
-  $: activationBlockedReason = !aiReady
-    ? 'Step order: connect AI first.'
-    : !chatReady
-      ? 'Step order: connect chat after AI.'
-      : '';
-  $: activationBlocked = activationBlockedReason.length > 0;
 
   onMount(() => {
     if (typeof BroadcastChannel !== 'undefined') {
@@ -136,9 +128,6 @@
 <section class="card grid">
   <h3>Avatar Popup (OBS Layer)</h3>
   <small class="muted">Upload a PNG with transparency, or use default `floating head.png`. Avatar is docked to the right of chat in the main window.</small>
-  {#if activationBlocked}
-    <small class="muted">{activationBlockedReason}</small>
-  {/if}
   <small class="muted">Rig controls are on the main avatar image (top-left panel). Use the on-image `Rig controls` button.</small>
   <div class="avatar-upload">
     <label class="muted" for="avatar-upload-input">Avatar image</label>

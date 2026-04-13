@@ -1,12 +1,73 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
-import type { AppStatus, AuthSessions, AvatarImage, BehaviorSettings, ChatMessage, DebugBundleResult, DiagnosticsState, EventMessage, PersonalityProfile, SelfTestReport, ServiceHealthReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceRuntimeReport } from '../types';
+import type { AppStatus, AuthSessions, AvatarImage, BehaviorSettings, ChatMessage, DebugBundleResult, DiagnosticsState, EventMessage, MemorySnapshot, MicDebugView, PersonalityProfile, SelfTestReport, ServiceHealthReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceRuntimeReport } from '../types';
 import type { RemarkGenerationRequest, RemarkResponse } from '../youtube/types';
 import { authSessionsStore, botLogStore, chatStore, debugBundleStore, diagnosticsStore, errorBannerStore, eventStore, personalityStore, selfTestReportStore, serviceHealthStore, statusStore } from '../stores/app';
 
 let runtimeTtsVoiceName: string | null = null;
 let runtimeTtsVolume = 100;
+let runtimeTtsAudio: HTMLAudioElement | null = null;
+let ttsQueue = Promise.resolve();
+let ttsGeneration = 0;
+
+function getRuntimeFlags(): {
+  __cohost_tts_speaking?: boolean;
+  __cohost_last_bot_reply_at?: number;
+  __cohost_recording_active?: boolean;
+  __cohost_tts_suppressed_until?: number;
+} {
+  return window as unknown as {
+    __cohost_tts_speaking?: boolean;
+    __cohost_last_bot_reply_at?: number;
+    __cohost_recording_active?: boolean;
+    __cohost_tts_suppressed_until?: number;
+  };
+}
+
+export function stopBotSpeech(): void {
+  if (typeof window === 'undefined') return;
+  ttsGeneration += 1;
+  ttsQueue = Promise.resolve();
+  const runtime = getRuntimeFlags();
+  runtime.__cohost_tts_speaking = false;
+  try {
+    window.speechSynthesis.cancel();
+  } catch {
+    // no-op
+  }
+  if (runtimeTtsAudio) {
+    try {
+      runtimeTtsAudio.pause();
+      runtimeTtsAudio.currentTime = 0;
+    } catch {
+      // no-op
+    }
+    runtimeTtsAudio = null;
+  }
+  for (const media of Array.from(document.querySelectorAll<HTMLMediaElement>('audio, video'))) {
+    try {
+      media.pause();
+    } catch {
+      // no-op
+    }
+  }
+  try {
+    const avatarChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('cohost-avatar-events') : null;
+    avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
+    avatarChannel?.close();
+  } catch {
+    // no-op
+  }
+}
+
+export function setRecordingSpeechBlock(active: boolean): void {
+  if (typeof window === 'undefined') return;
+  const runtime = getRuntimeFlags();
+  runtime.__cohost_recording_active = active;
+  runtime.__cohost_tts_suppressed_until = active ? Date.now() + 60_000 : Date.now() + 400;
+  if (active) stopBotSpeech();
+}
 
 export async function loadStatus(): Promise<void> {
   try {
@@ -118,8 +179,14 @@ export async function getBehaviorSettings(): Promise<BehaviorSettings> {
   return invoke<BehaviorSettings>('get_behavior_settings');
 }
 
-export async function setBehaviorSettings(cohostMode: boolean, scheduledMessagesMinutes: number | null): Promise<void> {
-  await invoke('set_behavior_settings', { cohostMode, scheduledMessagesMinutes });
+export async function setBehaviorSettings(
+  cohostMode: boolean,
+  scheduledMessagesMinutes: number | null,
+  minimumReplyIntervalMs?: number | null,
+  postBotMessagesToTwitch?: boolean | null,
+  topicContinuationMode?: boolean | null
+): Promise<void> {
+  await invoke('set_behavior_settings', { cohostMode, scheduledMessagesMinutes, minimumReplyIntervalMs, postBotMessagesToTwitch, topicContinuationMode });
 }
 
 export async function searchWeb(query: string): Promise<string> {
@@ -156,6 +223,22 @@ export async function clearMemory(): Promise<void> {
   await invoke('clear_memory');
 }
 
+export async function getMemorySnapshot(): Promise<MemorySnapshot> {
+  return invoke<MemorySnapshot>('get_memory_snapshot');
+}
+
+export async function openMemoryLog(): Promise<void> {
+  await invoke('open_memory_log');
+}
+
+export async function upsertPinnedMemory(label: string, content: string): Promise<void> {
+  await invoke('upsert_pinned_memory', { input: { label, content } });
+}
+
+export async function deletePinnedMemory(label: string): Promise<void> {
+  await invoke('delete_pinned_memory', { label });
+}
+
 export async function runSelfTest(): Promise<SelfTestReport> {
   const report = await invoke<SelfTestReport>('run_self_test');
   selfTestReportStore.set(report);
@@ -184,6 +267,10 @@ export async function transcribeLocalAudio(base64Audio: string, mimeType: string
 
 export async function transcribeMicChunk(durationMs: number): Promise<string> {
   return invoke<string>('transcribe_mic_chunk', { durationMs });
+}
+
+export async function captureMicDebug(durationMs: number): Promise<MicDebugView> {
+  return invoke<MicDebugView>('capture_mic_debug', { durationMs });
 }
 
 export async function submitStreamerPrompt(text: string): Promise<void> {
@@ -224,6 +311,50 @@ export async function synthesizeTtsCloud(text: string, voiceName: string | null 
   return invoke<string>('synthesize_tts_cloud', { text, voiceName });
 }
 
+export async function synthesizeTtsReaction(reaction: string, voiceName: string | null = null): Promise<string> {
+  return invoke<string>('synthesize_tts_reaction', { reaction, voiceName });
+}
+
+export async function playLocalSpeech(text: string, voiceName: string | null = null, volumePercent?: number): Promise<void> {
+  const clean = (text || '').trim();
+  if (!clean) return;
+  stopBotSpeech();
+  const dataUrl = await synthesizeTtsCloud(clean, voiceName);
+  await new Promise<void>((resolve) => {
+    const audio = new Audio(dataUrl);
+    runtimeTtsAudio = audio;
+    audio.volume = Math.max(0, Math.min(1, (volumePercent ?? runtimeTtsVolume ?? 100) / 100));
+    audio.onended = () => {
+      runtimeTtsAudio = null;
+      resolve();
+    };
+    audio.onerror = () => {
+      runtimeTtsAudio = null;
+      resolve();
+    };
+    void audio.play().catch(() => resolve());
+  });
+}
+
+export async function playTtsReaction(reaction: string, voiceName: string | null = null, volumePercent?: number): Promise<void> {
+  stopBotSpeech();
+  const dataUrl = await synthesizeTtsReaction(reaction, voiceName);
+  await new Promise<void>((resolve) => {
+    const audio = new Audio(dataUrl);
+    runtimeTtsAudio = audio;
+    audio.volume = Math.max(0, Math.min(1, (volumePercent ?? runtimeTtsVolume ?? 100) / 100));
+    audio.onended = () => {
+      runtimeTtsAudio = null;
+      resolve();
+    };
+    audio.onerror = () => {
+      runtimeTtsAudio = null;
+      resolve();
+    };
+    void audio.play().catch(() => resolve());
+  });
+}
+
 export async function saveAvatarImage(dataUrl: string, fileName: string | null): Promise<AvatarImage> {
   return invoke<AvatarImage>('save_avatar_image', { dataUrl, fileName });
 }
@@ -253,6 +384,9 @@ export async function registerEventListeners(): Promise<void> {
     let text = (input || '').trim();
     if (!text) return '';
     text = text
+      .replace(/\bgreyok\b/gi, 'Grey Okay')
+      .replace(/\bgreyok__\b/gi, 'Grey Okay')
+      .replace(/\bgrey ok\b/gi, 'Grey Okay')
       .replace(/\([^)]{1,120}\)/g, ' ')
       .replace(/\*[^*]{1,120}\*/g, ' ')
       .replace(/_[^_]{1,120}_/g, ' ')
@@ -271,12 +405,28 @@ export async function registerEventListeners(): Promise<void> {
       .join('')
       .replace(/\s+/g, ' ')
       .trim();
+    text = text
+      .replace(/\b([A-Za-z]+)\s+(s|re|ve|ll|d|m)\b(?=(?:\s+[A-Za-z])|[.,!?]|$)/gi, "$1'$2")
+      .replace(/\b(can)\s+t\b/gi, "can't")
+      .replace(/\b(won)\s+t\b/gi, "won't")
+      .replace(/\b(shan)\s+t\b/gi, "shan't")
+      .replace(/\b([A-Za-z]+n)\s+t\b(?=(?:\s+[A-Za-z])|[.,!?]|$)/gi, "$1't")
+      .replace(/\s+/g, ' ')
+      .trim();
     return text;
   }
 
-  async function speakBotText(text: string) {
+  async function speakBotText(text: string, generation: number) {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const runtime = window as unknown as { __cohost_tts_speaking?: boolean };
+    if (generation !== ttsGeneration) return;
+    const runtime = getRuntimeFlags();
+    const waitStart = Date.now();
+    while (runtime.__cohost_recording_active || (runtime.__cohost_tts_suppressed_until ?? 0) > Date.now()) {
+      if (Date.now() - waitStart > 12000) return;
+      if (generation !== ttsGeneration) return;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    if (generation !== ttsGeneration) return;
     // Expose speaking state to mic capture loop so it can avoid feedback loops.
     runtime.__cohost_tts_speaking = true;
     const clean = normalizeForSpeech(text);
@@ -284,7 +434,6 @@ export async function registerEventListeners(): Promise<void> {
       runtime.__cohost_tts_speaking = false;
       return;
     }
-    avatarChannel?.postMessage({ type: 'speak_start', text: clean, ts: Date.now() });
     const liveVolume = runtimeTtsVolume ?? ttsVolume;
     const liveVoice = runtimeTtsVoiceName ?? ttsVoiceName;
 
@@ -292,9 +441,22 @@ export async function registerEventListeners(): Promise<void> {
       const dataUrl = await synthesizeTtsCloud(clean, liveVoice && liveVoice !== 'auto' ? liveVoice : null);
       await new Promise<void>((resolve) => {
         const audio = new Audio(dataUrl);
+        runtimeTtsAudio = audio;
+        let started = false;
         audio.volume = Math.max(0, Math.min(1, liveVolume / 100));
-        audio.onended = () => resolve();
-        audio.onerror = () => resolve();
+        audio.onplay = () => {
+          if (started) return;
+          started = true;
+          avatarChannel?.postMessage({ type: 'speak_start', text: clean, ts: Date.now() });
+        };
+        audio.onended = () => {
+          runtimeTtsAudio = null;
+          resolve();
+        };
+        audio.onerror = () => {
+          runtimeTtsAudio = null;
+          resolve();
+        };
         void audio.play().catch(() => resolve());
       });
       runtime.__cohost_tts_speaking = false;
@@ -347,6 +509,7 @@ export async function registerEventListeners(): Promise<void> {
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
     };
     window.speechSynthesis.cancel();
+    avatarChannel?.postMessage({ type: 'speak_start', text: clean, ts: Date.now() });
     window.speechSynthesis.speak(utterance);
   }
 
@@ -354,9 +517,12 @@ export async function registerEventListeners(): Promise<void> {
     chatStore.update((items) => [event.payload, ...items].slice(0, 250));
   });
   await listen<ChatMessage>('bot_response', (event) => {
+    const runtime = getRuntimeFlags();
+    runtime.__cohost_last_bot_reply_at = Date.now();
     botLogStore.update((items) => [event.payload, ...items].slice(0, 250));
+    const generation = ttsGeneration;
     ttsQueue = ttsQueue
-      .then(() => speakBotText(event.payload.content))
+      .then(() => speakBotText(event.payload.content, generation))
       .catch(() => undefined);
   });
   await listen<EventMessage>('timeline_event', (event) => {
@@ -387,4 +553,3 @@ export async function registerEventListeners(): Promise<void> {
     void loadStatus();
   });
 }
-  let ttsQueue = Promise.resolve();

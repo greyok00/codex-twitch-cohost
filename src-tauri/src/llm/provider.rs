@@ -134,9 +134,9 @@ impl LlmService {
                 ],
                 stream: false,
                 options: OllamaChatOptions {
-                    temperature: 0.35,
-                    top_p: 0.9,
-                    repeat_penalty: 1.22,
+                    temperature: 0.22,
+                    top_p: 0.85,
+                    repeat_penalty: 1.28,
                 },
             };
             let mut request = client
@@ -230,12 +230,12 @@ pub(crate) fn normalize_model_name(raw: &str, provider_name: &str) -> String {
         || lower.contains("qwen2.5vl")
         || lower.contains("mistral-small:24b-instruct")
         || lower.contains("qwen2.5:14b-instruct")
-        || (cloud && (lower.contains("llama3.1:8b-instruct") || lower.contains("llama3.3:70b-instruct")))
+        || (cloud && (lower.contains("llama3.1:8b-instruct") || lower.contains("llama3.3:70b-instruct") || lower.contains("phi4:14b")))
     {
         if cloud {
             "qwen3:8b".to_string()
         } else {
-            "llama3.1:8b-instruct".to_string()
+            "llama3.2:3b".to_string()
         }
     } else {
         trimmed.to_string()
@@ -253,6 +253,10 @@ mod tests {
             "qwen3:8b"
         );
         assert_eq!(
+            normalize_model_name("phi4:14b", "ollama-cloud"),
+            "qwen3:8b"
+        );
+        assert_eq!(
             normalize_model_name("qwen2.5vl:latest", "ollama-cloud"),
             "qwen3:8b"
         );
@@ -262,7 +266,7 @@ mod tests {
     fn normalizes_bad_local_models_to_local_default() {
         assert_eq!(
             normalize_model_name("qwen2.5vl:latest", "local-ollama"),
-            "llama3.1:8b-instruct"
+            "llama3.2:3b"
         );
     }
 

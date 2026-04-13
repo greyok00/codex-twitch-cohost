@@ -45,6 +45,27 @@ export interface DebugBundleResult {
   sections: string[];
 }
 
+export interface MemoryRecordView {
+  id: string;
+  timestamp: string;
+  user?: string | null;
+  kind: string;
+  content: string;
+}
+
+export interface PinnedMemoryRecordView {
+  id: string;
+  label: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface MemorySnapshot {
+  logPath: string;
+  recent: MemoryRecordView[];
+  pinned: PinnedMemoryRecordView[];
+}
+
 export interface AppStatus {
   channel?: string;
   model: string;
@@ -98,6 +119,13 @@ export interface SttConfig {
   sttModelPath?: string | null;
 }
 
+export interface MicDebugView {
+  backend: string;
+  wavPath: string;
+  transcript: string;
+  durationMs: number;
+}
+
 export interface SttAutoConfigResult {
   applied: boolean;
   message: string;
@@ -134,4 +162,7 @@ export interface AvatarImage {
 export interface BehaviorSettings {
   cohostMode: boolean;
   scheduledMessagesMinutes?: number | null;
+  minimumReplyIntervalMs?: number | null;
+  postBotMessagesToTwitch?: boolean;
+  topicContinuationMode?: boolean;
 }

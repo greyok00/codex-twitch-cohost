@@ -7,18 +7,19 @@
   import DiagnosticsPanel from './DiagnosticsPanel.svelte';
   import {
     autoConfigureSttFast,
+    captureMicDebug,
     getSttConfig,
     getTtsVoice,
+    playTtsReaction,
+    setRecordingSpeechBlock,
     setTtsVoice,
     setTtsVolume,
     setVoiceEnabled,
+    stopBotSpeech,
     verifyVoiceRuntime
   } from '../api/tauri';
-  import type { VoiceRuntimeReport } from '../types';
+  import type { MicDebugView, VoiceRuntimeReport } from '../types';
   import { errorBannerStore } from '../stores/app';
-  export let aiReady = false;
-  export let chatReady = false;
-
   let selectedVoice = 'auto';
   let ttsVolume = 100;
   let sttReady = false;
@@ -27,26 +28,32 @@
   let sttStatus = '';
   let lastResult = '';
   let verifying = false;
+  let micDebugRunning = false;
+  let micDebug: MicDebugView | null = null;
   let runtimeReport: VoiceRuntimeReport | null = null;
-
-  $: activationBlockedReason = !aiReady
-    ? 'Step order: connect AI first.'
-    : !chatReady
-      ? 'Step order: connect chat after AI.'
-      : '';
-  $: activationBlocked = activationBlockedReason.length > 0;
+  let browserTtsAvailable = false;
+  let reactionPreviewing = false;
+  let customReaction = 'mmm...';
 
   const voiceOptions = [
     'auto',
     'en-US-JennyNeural',
     'en-US-AriaNeural',
     'en-US-GuyNeural',
+    'en-US-ChristopherNeural',
+    'en-US-EricNeural',
+    'en-US-RogerNeural',
+    'en-US-SteffanNeural',
+    'en-US-TonyNeural',
     'en-US-AnaNeural',
-    'en-GB-SoniaNeural'
+    'en-GB-SoniaNeural',
+    'en-GB-RyanNeural',
+    'en-AU-WilliamNeural'
   ];
 
   onMount(() => {
     void (async () => {
+      browserTtsAvailable = typeof window !== 'undefined' && 'speechSynthesis' in window;
       await loadSettings();
       await ensureSttDefaults();
       await runRuntimeVerification();
@@ -73,16 +80,12 @@
   }
 
   async function saveVoiceSettings() {
-    if (activationBlocked) {
-      errorBannerStore.set(activationBlockedReason);
-      return;
-    }
     try {
       await setVoiceEnabled(true);
       await setTtsVoice(selectedVoice === 'auto' ? null : selectedVoice);
       await setTtsVolume(ttsVolume);
+      ttsReady = true;
       lastResult = `Saved voice ${selectedVoice} at ${ttsVolume}% volume.`;
-      await runRuntimeVerification();
     } catch (error) {
       errorBannerStore.set('Saving TTS settings failed: ' + String(error));
     }
@@ -100,6 +103,7 @@
     } catch (error) {
       runtimeReport = null;
       errorBannerStore.set('Voice runtime verification failed: ' + String(error));
+      ttsReady = browserTtsAvailable;
     } finally {
       verifying = false;
     }
@@ -116,14 +120,40 @@
       errorBannerStore.set('STT auto-configure failed: ' + String(error));
     }
   }
+
+  async function runMicDebugCapture() {
+    micDebugRunning = true;
+    try {
+      stopBotSpeech();
+      setRecordingSpeechBlock(true);
+      micDebug = await captureMicDebug(1800);
+      sttStatus = `Mic debug captured via ${micDebug.backend}.`;
+    } catch (error) {
+      errorBannerStore.set('Mic debug capture failed: ' + String(error));
+    } finally {
+      setRecordingSpeechBlock(false);
+      micDebugRunning = false;
+    }
+  }
+
+  async function previewReaction(reaction: string) {
+    reactionPreviewing = true;
+    try {
+      await playTtsReaction(reaction, selectedVoice === 'auto' ? null : selectedVoice, ttsVolume);
+      lastResult = `Played reaction: ${reaction}.`;
+    } catch (error) {
+      errorBannerStore.set('TTS reaction failed: ' + String(error));
+    } finally {
+      reactionPreviewing = false;
+    }
+  }
+
+  $: effectiveTtsReady = ttsReady || browserTtsAvailable;
 </script>
 
 <section class="card grid">
   <h3>Settings</h3>
   <small class="muted">Voice output lives here. STT is auto-configured behind the scenes and no manual tuning is required.</small>
-  {#if activationBlocked}
-    <small class="muted">{activationBlockedReason}</small>
-  {/if}
 
   <div class="tts-row">
     <label class="muted" for="tts-voice">TTS voice</label>
@@ -139,17 +169,46 @@
     <Button.Root class="p-btn btn" on:click={runRuntimeVerification} disabled={verifying}>
       <Icon name="check" />{verifying ? 'Verifying...' : 'Verify STT/TTS'}
     </Button.Root>
+    <Button.Root class="p-btn btn" on:click={runMicDebugCapture} disabled={micDebugRunning}>
+      <Icon name="mic" />{micDebugRunning ? 'Capturing...' : 'Mic Debug Capture'}
+    </Button.Root>
   </div>
   {#if sttStatus}
     <small class="muted">{sttStatus}</small>
   {/if}
+  <div class="grid">
+    <small class="muted">Non-word TTS reactions</small>
+    <div class="row">
+      <Button.Root class="p-btn btn" on:click={() => previewReaction('soft hum')} disabled={reactionPreviewing}>
+        <Icon name="play" />Soft hum
+      </Button.Root>
+      <Button.Root class="p-btn btn" on:click={() => previewReaction('thinking hum')} disabled={reactionPreviewing}>
+        <Icon name="play" />Thinking hum
+      </Button.Root>
+      <Button.Root class="p-btn btn" on:click={() => previewReaction('surprised')} disabled={reactionPreviewing}>
+        <Icon name="play" />Surprised
+      </Button.Root>
+      <Button.Root class="p-btn btn" on:click={() => previewReaction('excited')} disabled={reactionPreviewing}>
+        <Icon name="play" />Excited
+      </Button.Root>
+    </div>
+    <div class="row">
+      <input bind:value={customReaction} maxlength="32" placeholder="Custom sound like mmm... or oh!" />
+      <Button.Root class="p-btn btn" on:click={() => previewReaction(customReaction)} disabled={reactionPreviewing}>
+        <Icon name="voice" />Play Custom
+      </Button.Root>
+    </div>
+  </div>
 
   <small class="muted state">
     <span class="light {sttReady ? 'on' : 'off'}" aria-hidden="true"></span>
     STT: {sttReady ? 'ready' : 'missing'}
-    <span class="light {ttsReady ? 'on' : 'off'}" aria-hidden="true"></span>
-    TTS: {ttsReady ? 'ready' : 'missing'}
+    <span class="light {effectiveTtsReady ? 'on' : 'off'}" aria-hidden="true"></span>
+    TTS: {effectiveTtsReady ? 'ready' : 'missing'}
   </small>
+  {#if !ttsReady && browserTtsAvailable}
+    <small class="muted">Using browser speech fallback if native TTS verification is unavailable.</small>
+  {/if}
   {#if runtimeReport}
     <small class="muted">Voice verification: {runtimeReport.overall.toUpperCase()} ({runtimeReport.generatedAt})</small>
     <div class="checks">
@@ -158,6 +217,14 @@
           [{check.status.toUpperCase()}] {check.name}: {check.details}
         </small>
       {/each}
+    </div>
+  {/if}
+  {#if micDebug}
+    <div class="checks">
+      <small class="check pass">[DEBUG] Backend: {micDebug.backend}</small>
+      <small class="check pass">[DEBUG] Duration: {micDebug.durationMs} ms</small>
+      <small class="check pass">[DEBUG] Transcript: {micDebug.transcript || '<empty>'}</small>
+      <small class="check pass">[DEBUG] WAV: {micDebug.wavPath}</small>
     </div>
   {/if}
   {#if lastResult}<small>{lastResult}</small>{/if}

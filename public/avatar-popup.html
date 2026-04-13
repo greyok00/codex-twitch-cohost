@@ -21,23 +21,27 @@
       --brow-h: 2.2%;
       --brow-gap: 24%;
       --brow-lift: 0%;
+      --mouth-fill: radial-gradient(ellipse at center, rgba(20,6,8,.9), rgba(7,3,5,.84));
+      --mouth-ring: rgba(255, 255, 255, 0);
+      --brow-fill: linear-gradient(180deg, rgba(16,18,23,.94), rgba(8,10,12,.95));
+      --brow-ring: rgba(255,255,255,.5);
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; width: 100%; height: 100%; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
       color: var(--text);
-      background: transparent;
+      background: #000;
       overflow: hidden;
     }
-    .stage { width: 100%; height: 100%; display: grid; place-items: center; padding: 0; background: transparent; }
+    .stage { width: 100%; height: 100%; display: grid; place-items: center; padding: 0; background: #000; }
     .hint { position: fixed; top: 10px; left: 12px; font-size: 12px; color: var(--muted); z-index: 22; }
     .avatar-wrap {
       position: relative;
       border-radius: 0;
       overflow: visible;
       border: 0;
-      background: transparent;
+      background: #000;
       box-shadow: none;
       max-width: min(86vw, 860px);
       max-height: calc(100vh - 48px);
@@ -61,12 +65,22 @@
     }
     .group-title { margin-top: 10px; font-size: 12px; color: #d7dcea; letter-spacing: .04em; text-transform: uppercase; }
     .row { display: grid; grid-template-columns: 24px 1fr 56px; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .row.color-row { grid-template-columns: 56px 1fr 72px; }
     .row select {
       background: rgba(17, 19, 24, 0.82);
       color: #f0f3f8;
       border: 1px solid rgba(222, 229, 241, .24);
       border-radius: 8px;
       padding: 6px 8px;
+    }
+    input[type="color"] {
+      width: 100%;
+      height: 30px;
+      border-radius: 8px;
+      border: 1px solid rgba(222, 229, 241, .24);
+      background: rgba(17, 19, 24, 0.82);
+      padding: 2px;
+      cursor: pointer;
     }
     input[type="range"] {
       -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
@@ -97,18 +111,51 @@
       left: 12px;
       bottom: 12px;
       z-index: 25;
-      border-color: rgba(228, 235, 245, 0.8);
-      background: linear-gradient(180deg, rgba(190,199,214,.92), rgba(106,117,136,.95));
-      color: #0e131a;
-      font-weight: 700;
+      width: 22px;
+      height: 22px;
+      min-width: 22px;
+      min-height: 22px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid rgba(129, 163, 124, 0.6);
+      background: linear-gradient(180deg, rgba(95, 124, 90, 0.92), rgba(68, 92, 65, 0.95));
+      box-shadow: 0 1px 0 rgba(255,255,255,.1) inset, 0 4px 12px rgba(0,0,0,.25);
+      color: transparent;
+      font-size: 0;
+      display: none;
+    }
+    .ui-toggle-fab::before {
+      content: '';
+      display: block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin: 0 auto;
+      background: rgba(205, 226, 198, 0.72);
+    }
+    .snap-fab {
+      position: fixed;
+      left: 44px;
+      bottom: 10px;
+      z-index: 25;
+      border-radius: 999px;
+      padding: 5px 10px;
+      border: 1px solid rgba(228, 235, 245, 0.28);
+      background: rgba(40, 45, 54, 0.78);
+      color: rgba(235, 239, 245, 0.88);
+      font-size: 11px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
     }
     .ui-hidden .align-panel, .ui-hidden .hint { display: none; }
+    .ui-hidden .ui-toggle-fab { display: block; }
     body.embed {
-      background: transparent;
+      background: #000;
     }
     body.embed .hint,
     body.embed .align-panel,
-    body.embed .ui-toggle-fab {
+    body.embed .ui-toggle-fab,
+    body.embed .snap-fab {
       display: none !important;
     }
     body.embed .avatar-wrap {
@@ -125,15 +172,15 @@
       width: var(--mouth-w); height: var(--mouth-h);
       transform: translate(-50%, -50%) scaleY(var(--mouth-open, 0.25));
       transform-origin: center;
-      border: 2px dashed rgba(255, 255, 255, 0.26);
+      border: 1px solid var(--mouth-ring);
       border-radius: 999px;
-      background: radial-gradient(ellipse at center, rgba(20,6,8,.9), rgba(7,3,5,.84));
+      background: var(--mouth-fill);
       box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset;
       pointer-events: auto;
       cursor: grab;
       transition: transform 70ms linear, box-shadow 90ms ease;
     }
-    .mouth.aligning { border-color: rgba(194, 210, 234, 0.78); }
+    .mouth.aligning { box-shadow: 0 0 0 1px rgba(194, 210, 234, 0.55) inset, 0 0 0 1px rgba(194, 210, 234, 0.34); }
     .mouth.viseme-rest { --mouth-open: 0.22; }
     .mouth.viseme-a { --mouth-open: 0.55; }
     .mouth.viseme-e { --mouth-open: 0.4; }
@@ -151,8 +198,8 @@
       width: var(--brow-w);
       height: var(--brow-h);
       border-radius: 999px;
-      background: linear-gradient(180deg, rgba(16,18,23,.94), rgba(8,10,12,.95));
-      border: 1px solid rgba(255,255,255,.5);
+      background: var(--brow-fill);
+      border: 1px solid var(--brow-ring);
       box-shadow:
         0 0 0 1px rgba(0,0,0,.55) inset,
         0 1px 6px rgba(0,0,0,.55);
@@ -186,6 +233,7 @@
       <div class="row"><span>Y</span><input id="my" type="range" min="10" max="95" step="0.1" /><span id="myv">74.0%</span></div>
       <div class="row"><span>W</span><input id="mw" type="range" min="6" max="60" step="0.1" /><span id="mwv">24.0%</span></div>
       <div class="row"><span>H</span><input id="mh" type="range" min="4" max="30" step="0.1" /><span id="mhv">10.0%</span></div>
+      <div class="row color-row"><span>Fill</span><input id="mc" type="color" value="#32090d" /><span id="mcv">#32090d</span></div>
 
       <div class="group-title">Eyebrows</div>
       <div class="row"><span>S</span>
@@ -201,6 +249,7 @@
       <div class="row"><span>W</span><input id="bw" type="range" min="4" max="24" step="0.1" /><span id="bwv">12.0%</span></div>
       <div class="row"><span>H</span><input id="bh" type="range" min="0.6" max="6" step="0.1" /><span id="bhv">2.2%</span></div>
       <div class="row"><span>G</span><input id="bg" type="range" min="6" max="50" step="0.1" /><span id="bgv">24.0%</span></div>
+      <div class="row color-row"><span>Fill</span><input id="bc" type="color" value="#111217" /><span id="bcv">#111217</span></div>
 
       <div class="actions">
         <button id="resetAll" type="button">Reset All</button>
@@ -215,6 +264,7 @@
       <div class="mouth viseme-rest aligning" id="mouth"></div>
     </div>
   </div>
+  <button id="snapFab" class="snap-fab" type="button">Snap</button>
   <button id="uiFab" class="ui-toggle-fab" type="button">Hide UI</button>
 
   <script>
@@ -232,6 +282,8 @@
     const MOUTH_KEY = 'cohost_mouth_align_v1';
     const BROW_KEY = 'cohost_brow_align_v1';
     const BROW_STYLE_KEY = 'cohost_brow_style_v1';
+    const MOUTH_COLOR_KEY = 'cohost_mouth_color_v1';
+    const BROW_COLOR_KEY = 'cohost_brow_color_v1';
 
     const ids = (name) => {
       const input = document.getElementById(name);
@@ -243,6 +295,7 @@
     const [my, myv] = ids('my');
     const [mw, mwv] = ids('mw');
     const [mh, mhv] = ids('mh');
+    const [mc, mcv] = ids('mc');
 
     const bs = document.getElementById('bs');
     const [bx, bxv] = ids('bx');
@@ -250,8 +303,10 @@
     const [bw, bwv] = ids('bw');
     const [bh, bhv] = ids('bh');
     const [bg, bgv] = ids('bg');
+    const [bc, bcv] = ids('bc');
 
     const resetAll = document.getElementById('resetAll');
+    const snapFab = document.getElementById('snapFab');
     const toggleUi = document.getElementById('toggleUi');
     const uiFab = document.getElementById('uiFab');
     let avatarChannel = null;
@@ -259,7 +314,9 @@
     const defaults = {
       mouth: { x: 50, y: 74, w: 24, h: 10 },
       brows: { x: 50, y: 33, w: 12, h: 2.2, g: 24 },
-      browStyle: 'straight'
+      browStyle: 'straight',
+      mouthColor: '#32090d',
+      browColor: '#111217'
     };
 
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -309,6 +366,22 @@
       localStorage.setItem(BROW_STYLE_KEY, val);
     }
 
+    function setMouthColor(color) {
+      const value = /^#[0-9a-f]{6}$/i.test(color) ? color : defaults.mouthColor;
+      root.style.setProperty('--mouth-fill', value);
+      mc.value = value;
+      mcv.textContent = value.toLowerCase();
+      localStorage.setItem(MOUTH_COLOR_KEY, value);
+    }
+
+    function setBrowColor(color) {
+      const value = /^#[0-9a-f]{6}$/i.test(color) ? color : defaults.browColor;
+      root.style.setProperty('--brow-fill', value);
+      bc.value = value;
+      bcv.textContent = value.toLowerCase();
+      localStorage.setItem(BROW_COLOR_KEY, value);
+    }
+
     function saveAlign(type, key, align) {
       localStorage.setItem(key, JSON.stringify(align));
       try {
@@ -337,6 +410,22 @@
         localStorage.setItem('cohost_avatar_image', fallback);
       };
       avatar.src = src;
+    }
+
+    function snapWindowToImage() {
+      const naturalWidth = avatar.naturalWidth || avatar.width || 560;
+      const naturalHeight = avatar.naturalHeight || avatar.height || 760;
+      const panelWidth = document.body.classList.contains('ui-hidden') || embedMode ? 0 : 388;
+      const targetWidth = Math.max(420, Math.min(screen.availWidth - 24, naturalWidth + panelWidth + 36));
+      const targetHeight = Math.max(520, Math.min(screen.availHeight - 24, naturalHeight + 64));
+      try {
+        localStorage.setItem('cohost_avatar_size', JSON.stringify({ width: targetWidth - 24, height: targetHeight - 60 }));
+      } catch {}
+      try {
+        if (avatarChannel) {
+          avatarChannel.postMessage({ type: 'snap_window', size: { width: targetWidth, height: targetHeight } });
+        }
+      } catch {}
     }
 
     const VISEMES = ['rest', 'a', 'e', 'o', 'm', 'f'];
@@ -435,7 +524,8 @@
     function applyUiHidden(hidden) {
       document.body.classList.toggle('ui-hidden', hidden);
       toggleUi.textContent = hidden ? 'Show UI' : 'Hide UI';
-      uiFab.textContent = hidden ? 'Show Controls' : 'Hide Controls';
+      uiFab.setAttribute('aria-label', hidden ? 'Show controls' : 'Hide controls');
+      uiFab.setAttribute('title', hidden ? 'Show controls' : 'Hide controls');
       localStorage.setItem('cohost_avatar_ui_hidden_v1', hidden ? '1' : '0');
     }
 
@@ -443,11 +533,14 @@
     applyMouth(readMouth());
     applyBrows(readBrows());
     setBrowStyle(localStorage.getItem(BROW_STYLE_KEY) || defaults.browStyle);
+    setMouthColor(localStorage.getItem(MOUTH_COLOR_KEY) || defaults.mouthColor);
+    setBrowColor(localStorage.getItem(BROW_COLOR_KEY) || defaults.browColor);
 
     mx.addEventListener('input', () => updateMouth({ x: +mx.value }));
     my.addEventListener('input', () => updateMouth({ y: +my.value }));
     mw.addEventListener('input', () => updateMouth({ w: +mw.value }));
     mh.addEventListener('input', () => updateMouth({ h: +mh.value }));
+    mc.addEventListener('input', () => setMouthColor(mc.value));
 
     bx.addEventListener('input', () => updateBrows({ x: +bx.value }));
     by.addEventListener('input', () => updateBrows({ y: +by.value }));
@@ -455,12 +548,16 @@
     bh.addEventListener('input', () => updateBrows({ h: +bh.value }));
     bg.addEventListener('input', () => updateBrows({ g: +bg.value }));
     bs.addEventListener('change', () => setBrowStyle(bs.value));
+    bc.addEventListener('input', () => setBrowColor(bc.value));
 
     resetAll.addEventListener('click', () => {
       applyMouth(defaults.mouth); saveAlign('mouth_align', MOUTH_KEY, defaults.mouth);
       applyBrows(defaults.brows); saveAlign('brow_align', BROW_KEY, defaults.brows);
       setBrowStyle(defaults.browStyle);
+      setMouthColor(defaults.mouthColor);
+      setBrowColor(defaults.browColor);
     });
+    snapFab.addEventListener('click', snapWindowToImage);
 
     if (!embedMode) {
       applyUiHidden(localStorage.getItem('cohost_avatar_ui_hidden_v1') === '1');
@@ -482,6 +579,8 @@
       if (e.key === MOUTH_KEY) applyMouth(readMouth());
       if (e.key === BROW_KEY) applyBrows(readBrows());
       if (e.key === BROW_STYLE_KEY) setBrowStyle(localStorage.getItem(BROW_STYLE_KEY) || defaults.browStyle);
+      if (e.key === MOUTH_COLOR_KEY) setMouthColor(localStorage.getItem(MOUTH_COLOR_KEY) || defaults.mouthColor);
+      if (e.key === BROW_COLOR_KEY) setBrowColor(localStorage.getItem(BROW_COLOR_KEY) || defaults.browColor);
     });
 
     if ('BroadcastChannel' in window) {

@@ -7,48 +7,72 @@
   import { errorBannerStore } from '../stores/app';
 
   let apiKey = '';
-  let selectedModel = 'gemma3:12b';
+  let selectedModel = 'qwen3:8b';
   let status = '';
   let loadingModels = false;
 
-  const recommended = [
-    { id: 'gemma3:12b', label: 'Funnier cohost default', style: 'Richer tone + more context', context: 'Medium-High', webSearch: 'Search supported' },
-    { id: 'qwen3:8b', label: 'Fast conversation', style: 'Quick + stable', context: 'Medium', webSearch: 'Search supported' },
-    { id: 'llama3.2:3b', label: 'Very light model', style: 'Fastest option', context: 'Low-Medium', webSearch: 'Search supported' },
-    { id: 'phi4:14b', label: 'Compact reasoning', style: 'Clean replies', context: 'Medium', webSearch: 'Search supported' }
+  type ModelMeta = {
+    id: string;
+    label: string;
+    style: string;
+    context: string;
+    webSearch: string;
+    uncensored?: boolean;
+    available?: boolean;
+  };
+
+  const recommended: ModelMeta[] = [
+    { id: 'qwen3:8b', label: 'Conversational | Qwen 8B', style: 'Fast everyday conversation', context: '8B', webSearch: 'App-fed search' },
+    { id: 'qwen3:14b', label: 'Conversational | Qwen 14B', style: 'Stronger follow-through', context: '14B', webSearch: 'App-fed search' },
+    { id: 'gemma3:12b', label: 'Conversational | Gemma 12B', style: 'Cleaner longer replies', context: '12B', webSearch: 'App-fed search' },
+    { id: 'gemma3:27b', label: 'Conversational | Gemma 27B', style: 'Best depth of the normal set', context: '27B', webSearch: 'App-fed search' },
+    { id: 'wizard-vicuna-uncensored', label: 'UNCENSORED | Wizard Vicuna 7B', style: 'Loose general chat', context: '7B', webSearch: 'App-fed search', uncensored: true },
+    { id: 'dolphin-mistral', label: 'UNCENSORED | Dolphin Mistral 7B', style: 'Edgier conversation', context: '7B', webSearch: 'App-fed search', uncensored: true },
+    { id: 'dolphin-mixtral', label: 'UNCENSORED | Dolphin Mixtral 8x7B', style: 'Heavier uncensored option', context: '8x7B', webSearch: 'App-fed search', uncensored: true },
+    { id: 'dolphin-phi', label: 'UNCENSORED | Dolphin Phi 3B', style: 'Small uncensored option', context: '3B', webSearch: 'App-fed search', uncensored: true }
   ];
   let discoveredModels: string[] = [];
-  let fastDiscovered: Array<{ id: string; label: string; style: string; context: string; webSearch: string }> = [];
+  let catalogModels: ModelMeta[] = [];
 
-  function modelSizeHint(model: string): number {
-    const m = model.toLowerCase();
-    const match = m.match(/:(\d+(?:\.\d+)?)b\b/);
-    if (!match) return 9999;
-    return Number(match[1]);
+  function normalizeFamily(model: string): string {
+    return model.toLowerCase().replace(/:(latest|[\w.\-]+)$/i, '');
   }
 
-  function modelFamily(model: string): string {
-    return model.split(':')[0].toLowerCase();
+  function enrichModel(id: string): ModelMeta {
+    const lower = id.toLowerCase();
+    const family = normalizeFamily(lower);
+    const direct = recommended.find((entry) => lower === entry.id.toLowerCase());
+    if (direct) return { ...direct, id };
+    const familyMatch = recommended.find((entry) => family.startsWith(normalizeFamily(entry.id)));
+    if (familyMatch) return { ...familyMatch, id };
+    const uncensored = lower.includes('uncensored') || lower.startsWith('dolphin-');
+    return {
+      id,
+      label: uncensored ? 'Uncensored discovered model' : 'Discovered cloud model',
+      style: uncensored ? 'Looser-aligned output' : 'Live account model',
+      context: '-',
+      webSearch: 'App-fed search',
+      uncensored,
+      available: true
+    };
   }
 
-  function pickFastModels(models: string[]): Array<{ id: string; label: string; style: string; context: string; webSearch: string }> {
-    const ranked = [...models].sort((a, b) => modelSizeHint(a) - modelSizeHint(b));
-    const seen = new Set<string>();
-    const out: Array<{ id: string; label: string; style: string; context: string; webSearch: string }> = [];
-    for (const id of ranked) {
-      const fam = modelFamily(id);
-      if (seen.has(fam)) continue;
-      seen.add(fam);
-      out.push({
-        id,
-        label: 'Detected fast pick',
-        style: 'Auto-ranked small model',
-        context: modelSizeHint(id) <= 12 ? 'Low-Medium' : 'Medium',
-        webSearch: 'Search supported'
+  function rebuildCatalog(models: string[]) {
+    const availableFamilies = new Set(models.map((model) => normalizeFamily(model)));
+    catalogModels = recommended
+      .map((entry) => {
+        const matched = models.find((model) => normalizeFamily(model).startsWith(normalizeFamily(entry.id)));
+        const resolved = matched ? enrichModel(matched) : { ...entry };
+        return {
+          ...resolved,
+          available: availableFamilies.has(normalizeFamily(entry.id)) || !!matched
+        };
+      })
+      .sort((a, b) => {
+        if (!!a.uncensored !== !!b.uncensored) return a.uncensored ? 1 : -1;
+        return recommended.findIndex((entry) => entry.id === a.id || normalizeFamily(a.id).startsWith(normalizeFamily(entry.id)))
+          - recommended.findIndex((entry) => entry.id === b.id || normalizeFamily(b.id).startsWith(normalizeFamily(entry.id)));
       });
-      if (out.length >= 5) break;
-    }
-    return out;
   }
 
   async function refreshModels() {
@@ -56,13 +80,14 @@
     try {
       const models = await getProviderModels('ollama-cloud');
       discoveredModels = models;
-      fastDiscovered = pickFastModels(models);
+      rebuildCatalog(models);
       if (models.length > 0) {
-        const picks = fastDiscovered.length > 0 ? fastDiscovered : models.map((id) => ({ id, label: 'Detected model', style: 'Live', context: '-', webSearch: 'Search supported' }));
-        if (!picks.find((m) => m.id === selectedModel)) selectedModel = picks[0].id;
-        status = `Connected to Ollama Cloud. Found ${models.length} model(s). Picked up to 5 fast presets.`;
+        if (!catalogModels.find((m) => m.id === selectedModel)) selectedModel = catalogModels[0].id;
+        const uncensoredCount = catalogModels.filter((entry) => entry.uncensored).length;
+        const availableCount = catalogModels.filter((entry) => entry.available).length;
+        status = `Connected to Ollama Cloud. Showing ${catalogModels.length} curated picks, ${availableCount} available on this account, including ${uncensoredCount} uncensored option(s).`;
       } else {
-        status = 'Connected, but no cloud models were returned for this account.';
+        status = 'Connected, but account discovery returned no models. Curated picks are still listed below.';
       }
     } catch (error) {
       status = 'Cloud model discovery failed.';
@@ -73,6 +98,7 @@
   }
 
   onMount(async () => {
+    rebuildCatalog([]);
     try {
       const saved = await getProviderApiKey('ollama-cloud');
       if (saved && saved.trim()) {
@@ -145,27 +171,30 @@
   </div>
 
   <label class="muted" for="cloud-model-preset">Model preset</label>
-  <small class="muted">Choose a model from your account. `Check Cloud Models` loads available models directly from Ollama Cloud.</small>
+  <small class="muted">Four conversational picks and four uncensored picks. Uncensored models are labeled directly.</small>
   <UiSelect
     bind:value={selectedModel}
-    options={(fastDiscovered.length > 0 ? fastDiscovered : recommended).map((model) => ({ value: model.id, label: `${model.id} - ${model.label}` }))}
+    options={catalogModels.map((model) => ({
+      value: model.id,
+      label: model.label
+    }))}
     placeholder="Select cloud model preset"
   />
 
   <Button.Root class="p-btn btn" on:click={saveKeyAndCloudMode}><Icon name="cloud" />3) Enable Cloud-Only Mode</Button.Root>
 
   <div class="cap-grid">
+    <div class="cap-head">Preset</div>
     <div class="cap-head">Model</div>
-    <div class="cap-head">Best For</div>
     <div class="cap-head">Style</div>
-    <div class="cap-head">Context</div>
-    <div class="cap-head">Search</div>
-    {#each (fastDiscovered.length > 0 ? fastDiscovered : recommended) as model}
-      <div>{model.id}</div>
+    <div class="cap-head">Size</div>
+    <div class="cap-head">Notes</div>
+    {#each catalogModels as model}
       <div>{model.label}</div>
+      <div>{model.id}</div>
       <div>{model.style}</div>
       <div>{model.context}</div>
-      <div>{model.webSearch}</div>
+      <div>{model.uncensored ? 'Uncensored' : 'Conversational'}{model.available === false ? ' | Not detected on account' : ''}</div>
     {/each}
   </div>
 

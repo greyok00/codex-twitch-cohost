@@ -14,6 +14,7 @@
     | 'check'
     | 'wrench'
     | 'copy'
+    | 'folder'
     | 'close'
     | 'bot'
     | 'user'
@@ -74,6 +75,9 @@
   {:else if name === 'copy'}
     <rect x="9" y="9" width="11" height="11" rx="2" />
     <path d="M5 15V5h10" />
+  {:else if name === 'folder'}
+    <path d="M3 7h6l2 2h10v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z" />
+    <path d="M3 10V7a3 3 0 0 1 3-3h3l2 2h7a3 3 0 0 1 3 3v1" />
   {:else if name === 'close'}
     <path d="m6 6 12 12" />
     <path d="m18 6-12 12" />

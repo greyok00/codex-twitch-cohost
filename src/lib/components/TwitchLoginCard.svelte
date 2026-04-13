@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Button } from 'bits-ui';
   import { onMount } from 'svelte';
-  import { get } from 'svelte/store';
   import { listen } from '@tauri-apps/api/event';
   import Icon from './ui/Icon.svelte';
   import { clearAuthSessions, clearBotSession, clearStreamerSession, connectChat, connectTwitch, disconnectChat, getTwitchOauthSettings, loadAuthSessions, loadStatus, openExternal, openIsolatedTwitchWindow, setTwitchOauthSettings } from '../api/tauri';
@@ -15,8 +14,6 @@
   const streamerAuthProfile = 'streamer-default';
   let showAdvanced = false;
   let showTools = false;
-  let autoJoinInFlight = false;
-  let autoJoinRetryScheduled = false;
   let oauthCode: { userCode: string; verificationUri: string; verificationUrl: string; role: string } | null = null;
   $: canJoin = $authSessionsStore.botTokenPresent && $authSessionsStore.streamerTokenPresent;
   $: oauthConfigured = Boolean(clientId && clientId.trim() && clientId !== 'your_twitch_client_id' && clientId !== 'replace_client_id');
@@ -48,7 +45,6 @@
         await loadSavedOAuthSettings();
         await loadAuthSessions();
         await loadStatus();
-        void maybeAutoJoin();
       } catch {
         // Keep defaults if settings are unavailable during first launch.
       }
@@ -116,7 +112,6 @@
       setTimeout(() => {
         void loadSavedOAuthSettings();
         void loadAuthSessions();
-        void maybeAutoJoin();
       }, 1200);
     } catch (error) {
       logUiMessage('OAuth launch failed: ' + String(error));
@@ -173,7 +168,6 @@
       setTimeout(() => {
         void loadSavedOAuthSettings();
         void loadAuthSessions();
-        void maybeAutoJoin();
       }, 1200);
     } catch (error) {
       logUiMessage('Streamer OAuth failed: ' + String(error));
@@ -246,32 +240,6 @@
     }
   }
 
-  async function maybeAutoJoin() {
-    if (autoJoinInFlight) return;
-    const sessions = get(authSessionsStore);
-    const status = get(statusStore);
-    if (!sessions.botTokenPresent || !sessions.streamerTokenPresent || status.twitchState === 'connected') {
-      return;
-    }
-    autoJoinInFlight = true;
-    try {
-      await joinNow();
-    } finally {
-      autoJoinInFlight = false;
-      const latest = get(statusStore);
-      if (latest.twitchState !== 'connected' && !autoJoinRetryScheduled) {
-        autoJoinRetryScheduled = true;
-        window.setTimeout(() => {
-          autoJoinRetryScheduled = false;
-          void maybeAutoJoin();
-        }, 1500);
-      }
-    }
-  }
-
-  $: if (canJoin && $statusStore.twitchState !== 'connected') {
-    void maybeAutoJoin();
-  }
 </script>
 
 <section class="card auth-card">

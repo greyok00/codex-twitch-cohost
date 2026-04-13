@@ -192,7 +192,7 @@ body::before {
   display: grid;
   gap: 10px;
   align-content: stretch;
-  grid-template-rows: minmax(300px, 1.45fr) minmax(120px, 0.6fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .sidebar {
@@ -402,26 +402,243 @@ body::before {
 }
 
 .feed {
-  min-height: 72px;
+  min-height: 0;
   height: 100%;
   overflow: auto;
   border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  padding: 8px;
+  border-radius: 14px;
+  padding: 14px;
   background: rgba(16, 17, 21, 0.52);
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .session-chat-panel {
   min-height: 0;
   height: 100%;
-  grid-template-rows: auto auto auto auto minmax(72px, 1fr) auto;
-  gap: 12px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 8px;
+  overflow: hidden;
 }
 
-.cohost-controls {
+.head {
   display: grid;
-  grid-template-columns: 108px minmax(180px, 230px) 108px max-content 92px minmax(150px, 1fr) auto;
-  gap: 8px 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.head h3 {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.health {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.session-toggle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.session-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: auto;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  text-align: left;
+}
+
+.session-mode-toggle.online {
+  background: rgba(41, 128, 77, 0.18);
+  border-color: rgba(78, 210, 130, 0.34);
+}
+
+.session-mode-toggle.offline {
+  background: rgba(130, 43, 43, 0.16);
+  border-color: rgba(230, 89, 89, 0.28);
+}
+
+.session-mode-toggle .mode-light {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset;
+}
+
+.session-mode-toggle.online .mode-light {
+  background: #4dd67d;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 0 16px rgba(77, 214, 125, 0.5);
+}
+
+.session-mode-toggle.offline .mode-light {
+  background: #e35a5a;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 0 16px rgba(227, 90, 90, 0.38);
+}
+
+.session-mode-toggle .mode-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.session-mode-toggle .mode-copy strong {
+  font-size: 13px;
+}
+
+.session-mode-toggle.inline {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.session-mode-toggle.small {
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
+.session-mode-toggle.small .mode-copy strong {
+  font-size: 12px;
+}
+
+.session-surface {
+  min-height: 0;
+  display: grid;
+}
+
+.session-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-meta {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.transcript-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+}
+
+.transcript-light {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: rgba(154, 160, 173, 0.42);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+.transcript-status.recording .transcript-light {
+  background: rgba(74, 215, 125, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 0 10px rgba(74, 215, 125, 0.55);
+}
+
+.transcript-status.sent .transcript-light {
+  background: rgba(126, 191, 255, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 0 12px rgba(126, 191, 255, 0.65);
+  animation: transcript-send-pulse 0.52s ease-out 1;
+}
+
+@keyframes transcript-send-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  35% {
+    transform: scale(1.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.92;
+  }
+}
+
+.session-feed-column {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.composer {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.composer input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.composer-action-btn {
+  min-height: 42px;
+  min-width: 102px;
+}
+
+.composer-action-btn .label {
+  white-space: nowrap;
+}
+
+.cohost-controls-panel {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.cohost-runtime-card {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cohost-controls-table {
+  display: grid;
+  gap: 10px;
+}
+
+.cohost-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 1fr);
+  gap: 10px;
   align-items: center;
   border: 1px solid var(--line-soft);
   border-radius: 12px;
@@ -431,34 +648,66 @@ body::before {
   -webkit-backdrop-filter: blur(10px) saturate(115%);
 }
 
-.session-meta {
-  font-size: 12px;
-  line-height: 1.35;
+.cohost-control-row.compact {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.cohost-cell {
+.compact-inline {
+  flex-wrap: nowrap;
+}
+
+.cohost-control-label {
+  display: grid;
+  gap: 2px;
+}
+
+.cohost-control-label strong {
+  font-size: 14px;
+}
+
+.cohost-control-label small {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.cohost-control-value {
   min-width: 0;
 }
 
-.cohost-toggle {
-  justify-self: start;
-  align-self: center;
-  padding-bottom: 0;
+.cohost-control-value.inline-toggle {
+  display: flex;
+  justify-content: flex-end;
 }
 
-.cohost-cell.label {
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+.mode-button-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
-.cohost-cell.value {
-  justify-self: end;
-  white-space: nowrap;
+.mode-button-group.two-way {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.slider-wrap {
-  min-width: 160px;
+.mode-btn {
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.mode-btn.active {
+  border-color: rgba(248, 249, 251, 0.46);
+  background: linear-gradient(180deg, rgba(177, 180, 186, 0.52), rgba(103, 106, 114, 0.66));
+  color: #fbfcff;
+}
+
+.pace-control {
+  display: grid;
+  gap: 6px;
+}
+
+.pace-control .ui-slider {
+  width: 100%;
 }
 
 :root[data-theme='light'] .feed {
@@ -469,7 +718,8 @@ body::before {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  margin-bottom: 6px;
+  margin-bottom: 10px;
+  font-size: 14px;
 }
 
 .tag,
@@ -478,7 +728,7 @@ body::before {
   border: 1px solid var(--line-soft);
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: #f0f2f6;
   background: rgba(114, 117, 124, 0.34);
 }
@@ -709,6 +959,7 @@ textarea {
 }
 
 .ui-switch {
+  position: relative;
   width: 52px;
   height: 28px;
   border-radius: 999px;
@@ -716,6 +967,8 @@ textarea {
   padding: 2px;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
   background: linear-gradient(180deg, rgba(126, 130, 138, 0.42), rgba(78, 80, 87, 0.62));
 }
 
@@ -728,6 +981,10 @@ textarea {
 }
 
 .ui-switch-thumb {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  flex: 0 0 auto;
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -738,7 +995,7 @@ textarea {
 }
 
 .ui-switch[data-state='checked'] .ui-switch-thumb {
-  transform: translateX(23px);
+  transform: translateX(24px);
 }
 
 .ui-slider {
@@ -1337,20 +1594,20 @@ a {
     grid-template-columns: 1fr;
   }
 
-  .cohost-controls,
+  .composer {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .composer input {
+    grid-column: 1 / -1;
+  }
+
+  .session-main-grid,
   .yt-mini-shell,
   .yt-upload-row,
   .yt-controls-grid,
   .yt-live-grid {
     grid-template-columns: 1fr;
-  }
-
-  .cohost-toggle {
-    justify-self: start;
-  }
-
-  .cohost-cell.value {
-    justify-self: start;
   }
 
   .session-split {
