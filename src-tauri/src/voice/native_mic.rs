@@ -68,6 +68,7 @@ pub async fn capture_wav_base64_with_debug(duration_ms: u64) -> AppResult<(Strin
 
 async fn capture_to_wav(path: &str, duration_ms: u64) -> AppResult<String> {
     let seconds_precise = format!("{:.2}", (duration_ms as f64) / 1000.0);
+    #[cfg(target_os = "linux")]
     let seconds_int = ((duration_ms as f64) / 1000.0).ceil() as u64;
     let clean_filter = "highpass=f=70,lowpass=f=7800,speechnorm=e=6.5:r=0.0001:l=1,volume=1.25";
 

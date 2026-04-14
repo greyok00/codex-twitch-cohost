@@ -527,8 +527,8 @@ fn spawn_backend_terminal_process(bin: Option<&PathBuf>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let script = format!(
-            "tell application \"Terminal\" to do script \"{} shell\"",
-            bin.to_string_lossy().replace('\"', "\\\"")
+            "tell application \"Terminal\" to do script \"{}\"",
+            command_line.replace('\"', "\\\"")
         );
         std::process::Command::new("osascript")
             .arg("-e")
@@ -540,10 +540,7 @@ fn spawn_backend_terminal_process(bin: Option<&PathBuf>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("cmd")
-            .args([
-                "/K",
-                &format!("\"{}\" shell", bin.to_string_lossy()),
-            ])
+            .args(["/K", &command_line])
             .spawn()
             .map_err(|e| format!("failed to launch console: {e}"))?;
         return Ok(());
