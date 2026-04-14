@@ -166,3 +166,82 @@ export interface BehaviorSettings {
   postBotMessagesToTwitch?: boolean;
   topicContinuationMode?: boolean;
 }
+
+export interface SceneSettings {
+  mode: 'solo' | 'dual_debate' | 'chat_topic';
+  maxTurnsBeforePause: number;
+  allowExternalTopicChanges: boolean;
+  secondaryCharacterSlug: string;
+}
+
+export interface CharacterStudioSettings {
+  selectedPreset: string;
+  warmth: number;
+  humor: number;
+  flirt: number;
+  edge: number;
+  energy: number;
+  story: number;
+  extraDirection: string;
+}
+
+export interface PublicCallSettings {
+  enabled: boolean;
+  token: string;
+  defaultCharacterSlug: string;
+}
+
+export interface VoiceSessionDiagnostics {
+  sessionId: string;
+  mode: 'owner' | 'public';
+  engine: 'browser-speech' | 'local-fallback' | 'none';
+  status: 'idle' | 'starting' | 'listening' | 'processing' | 'replying' | 'error';
+  interimText: string;
+  lastFinalText: string;
+  firstInterimLatencyMs?: number | null;
+  finalLatencyMs?: number | null;
+  aiLatencyMs?: number | null;
+  ttsLatencyMs?: number | null;
+  restartCount: number;
+  droppedCount: number;
+  lastError?: string | null;
+}
+
+export interface VoiceInputFrame {
+  sessionId: string;
+  mode: 'owner' | 'public';
+  engine: 'browser-speech' | 'local-fallback' | 'none';
+  transcript: string;
+  normalizedTranscript: string;
+  commandHint?: string | null;
+  nameHint?: string | null;
+  timeContextIso: string;
+  finalLatencyMs?: number | null;
+}
+
+export interface BackendModuleView {
+  name: string;
+  light: 'red' | 'yellow' | 'green' | string;
+  message: string;
+  restarts: number;
+  lastStartedAt?: string | null;
+  lastFinishedAt?: string | null;
+  lastDurationMs?: number | null;
+}
+
+export interface HeadlessStatusView {
+  configPath: string;
+  model: string;
+  voiceEnabled: boolean;
+  sttBackend: string;
+  ttsBackend: string;
+  memoryLog: string;
+}
+
+export interface BackendControlSnapshot {
+  connected: boolean;
+  addr: string;
+  status?: HeadlessStatusView | null;
+  modules: BackendModuleView[];
+  error?: string | null;
+}

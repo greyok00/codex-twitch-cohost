@@ -7,19 +7,31 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    personality::engine::PersonalityProfile,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub twitch: TwitchConfig,
     pub providers: ProviderSection,
-    pub personality_path: String,
+    #[serde(default)]
+    pub personality: PersonalityProfile,
     pub voice: VoiceConfig,
     pub memory: MemoryConfig,
     pub moderation: ModerationConfig,
     pub search: SearchConfig,
     pub browser: BrowserConfig,
     pub behavior: BehaviorConfig,
+    #[serde(default)]
+    pub scene: SceneConfig,
+    #[serde(default)]
+    pub character_studio: CharacterStudioConfig,
+    #[serde(default)]
+    pub avatar_rig: AvatarRigConfig,
+    #[serde(default)]
+    pub public_call: PublicCallConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,8 +119,69 @@ pub struct BehaviorConfig {
     pub topic_continuation_mode: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneConfig {
+    pub mode: String,
+    pub max_turns_before_pause: u8,
+    pub allow_external_topic_changes: bool,
+    pub secondary_character_slug: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterStudioConfig {
+    pub selected_preset: String,
+    pub warmth: u8,
+    pub humor: u8,
+    pub flirt: u8,
+    pub edge: u8,
+    pub energy: u8,
+    pub story: u8,
+    pub extra_direction: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvatarRigConfig {
+    pub mouth_x: i16,
+    pub mouth_y: i16,
+    pub mouth_width: u16,
+    pub mouth_open: u16,
+    pub mouth_softness: u16,
+    pub mouth_smile: i16,
+    pub mouth_tilt: i16,
+    pub mouth_color: String,
+    #[serde(default)]
+    pub brow_x: i16,
+    pub brow_y: i16,
+    pub brow_spacing: u16,
+    pub brow_arch: i16,
+    pub brow_tilt: i16,
+    pub brow_thickness: u16,
+    pub brow_color: String,
+    pub eye_open: u16,
+    pub eye_squint: u16,
+    pub head_tilt: i16,
+    pub head_scale: u16,
+    pub glow: u16,
+    pub popup_width: u16,
+    pub popup_height: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PublicCallConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_public_call_token")]
+    pub token: String,
+    #[serde(default)]
+    pub default_character_slug: String,
+}
+
 fn default_post_bot_messages_to_twitch() -> bool {
     false
+}
+
+fn default_public_call_token() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 impl Default for AppConfig {
@@ -149,7 +222,7 @@ impl Default for AppConfig {
                     enabled: false,
                 }],
             },
-            personality_path: "personality.json".to_string(),
+            personality: PersonalityProfile::default(),
             voice: VoiceConfig {
                 enabled: false,
                 voice_name: Some("en_US-lessac-medium".to_string()),
@@ -185,12 +258,75 @@ impl Default for AppConfig {
             },
             behavior: BehaviorConfig {
                 proactive_event_replies: true,
-                cohost_mode: true,
+                cohost_mode: false,
                 auto_greet: true,
-                scheduled_messages_minutes: Some(15),
+                scheduled_messages_minutes: None,
                 post_bot_messages_to_twitch: false,
                 topic_continuation_mode: false,
             },
+            scene: SceneConfig::default(),
+            character_studio: CharacterStudioConfig::default(),
+            avatar_rig: AvatarRigConfig::default(),
+            public_call: PublicCallConfig {
+                enabled: false,
+                token: default_public_call_token(),
+                default_character_slug: "default".to_string(),
+            },
+        }
+    }
+}
+
+impl Default for SceneConfig {
+    fn default() -> Self {
+        Self {
+            mode: "solo".to_string(),
+            max_turns_before_pause: 2,
+            allow_external_topic_changes: true,
+            secondary_character_slug: String::new(),
+        }
+    }
+}
+
+impl Default for CharacterStudioConfig {
+    fn default() -> Self {
+        Self {
+            selected_preset: "basic-assistant".to_string(),
+            warmth: 70,
+            humor: 35,
+            flirt: 0,
+            edge: 5,
+            energy: 40,
+            story: 35,
+            extra_direction: String::new(),
+        }
+    }
+}
+
+impl Default for AvatarRigConfig {
+    fn default() -> Self {
+        Self {
+            mouth_x: 0,
+            mouth_y: 20,
+            mouth_width: 32,
+            mouth_open: 22,
+            mouth_softness: 70,
+            mouth_smile: 8,
+            mouth_tilt: 0,
+            mouth_color: "#7c2d12".to_string(),
+            brow_x: 0,
+            brow_y: -22,
+            brow_spacing: 36,
+            brow_arch: 14,
+            brow_tilt: 0,
+            brow_thickness: 9,
+            brow_color: "#2b211f".to_string(),
+            eye_open: 62,
+            eye_squint: 16,
+            head_tilt: 0,
+            head_scale: 100,
+            glow: 28,
+            popup_width: 320,
+            popup_height: 420,
         }
     }
 }
@@ -216,7 +352,7 @@ impl AppConfig {
         PathBuf::from("./config.json")
     }
 
-    fn default_personality_path() -> PathBuf {
+    fn legacy_personality_path() -> PathBuf {
         Self::user_config_path()
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -224,16 +360,32 @@ impl AppConfig {
     }
 
     fn normalize_runtime_paths(&mut self) {
-        let current = self.personality_path.trim();
-        if current.is_empty() {
-            self.personality_path = Self::default_personality_path().to_string_lossy().to_string();
+        self.scene.mode = match self.scene.mode.trim() {
+            "dual_debate" => "dual_debate".to_string(),
+            "chat_topic" => "chat_topic".to_string(),
+            _ => "solo".to_string(),
+        };
+        self.scene.max_turns_before_pause = self.scene.max_turns_before_pause.clamp(1, 6);
+    }
+
+    fn maybe_migrate_legacy_personality(&mut self) {
+        let default = PersonalityProfile::default();
+        let looks_unset = self.personality.name == default.name
+            && self.personality.tone == default.tone
+            && self.personality.response_style == default.response_style
+            && self.personality.master_prompt_override.is_empty();
+        if !looks_unset {
             return;
         }
-        let path = PathBuf::from(current);
-        if path.is_absolute() {
+        let legacy = Self::legacy_personality_path();
+        if !legacy.exists() {
             return;
         }
-        self.personality_path = Self::default_personality_path().to_string_lossy().to_string();
+        if let Ok(raw) = fs::read_to_string(&legacy) {
+            if let Ok(profile) = serde_json::from_str::<PersonalityProfile>(&raw) {
+                self.personality = profile;
+            }
+        }
     }
 
     fn ensure_parent_dir(path: &Path) -> AppResult<()> {
@@ -304,13 +456,24 @@ impl AppConfig {
                 AppError::Config(format!("invalid JSON in {}: {e}", config_path.display()))
             })?;
             cfg.normalize_runtime_paths();
+            cfg.maybe_migrate_legacy_personality();
             cfg.validate()?;
             return Ok(cfg);
         }
 
         let mut cfg = Self::default();
         cfg.normalize_runtime_paths();
+        cfg.maybe_migrate_legacy_personality();
         Ok(cfg)
+    }
+
+    pub fn load_path_for_display() -> String {
+        Self::read_candidates()
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(Self::write_target_path)
+            .to_string_lossy()
+            .to_string()
     }
 
     pub fn save_to_disk(&self) -> AppResult<()> {
@@ -364,6 +527,7 @@ impl AppConfig {
         let mut cfg: Self = serde_json::from_str(&raw)
             .map_err(|e| AppError::Config(format!("invalid JSON in {}: {e}", path.display())))?;
         cfg.normalize_runtime_paths();
+        cfg.maybe_migrate_legacy_personality();
         cfg.validate()?;
         Ok(cfg)
     }

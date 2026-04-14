@@ -1,5 +1,6 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -11,11 +12,25 @@ use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
+    #[serde(default = "default_memory_schema_version")]
+    pub schema_version: u8,
     pub id: String,
     pub timestamp: String,
     pub user: Option<String>,
     pub kind: String,
     pub content: String,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub priority: u8,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub metadata: Option<Value>,
+}
+
+fn default_memory_schema_version() -> u8 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,12 +60,30 @@ impl MemoryStore {
     }
 
     pub fn append(&self, kind: &str, user: Option<&str>, content: &str) -> AppResult<()> {
+        self.append_structured(kind, user, content, None, 0, vec![], None)
+    }
+
+    pub fn append_structured(
+        &self,
+        kind: &str,
+        user: Option<&str>,
+        content: &str,
+        subject: Option<String>,
+        priority: u8,
+        tags: Vec<String>,
+        metadata: Option<Value>,
+    ) -> AppResult<()> {
         let record = MemoryRecord {
+            schema_version: default_memory_schema_version(),
             id: Uuid::new_v4().to_string(),
             timestamp: Utc::now().to_rfc3339(),
             user: user.map(|x| x.to_string()),
             kind: kind.to_string(),
             content: content.to_string(),
+            subject,
+            priority,
+            tags,
+            metadata,
         };
         let key = format!("{}:{}", record.timestamp, record.id);
         let value = serde_json::to_vec(&record)?;

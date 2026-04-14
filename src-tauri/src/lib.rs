@@ -1,17 +1,19 @@
 mod app;
 mod browser;
 mod commands;
-mod config;
-mod error;
-mod llm;
-mod memory;
-mod personality;
+pub mod config;
+pub mod error;
+pub mod headless;
+pub mod llm;
+pub mod memory;
+pub mod personality;
 mod search;
-mod security;
-mod state;
+pub mod security;
+pub mod state;
+pub mod tts;
 mod twitch;
 mod utils;
-mod voice;
+pub mod voice;
 
 use tauri::Manager;
 
@@ -32,6 +34,10 @@ pub fn run() {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("startup failed: {err}"))
             })?;
             let _ = app.manage(state);
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = commands::startup_spawn_backend_daemon(&handle).await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -39,6 +45,10 @@ pub fn run() {
             commands::get_twitch_oauth_settings,
             commands::get_auth_sessions,
             commands::get_behavior_settings,
+            commands::get_scene_settings,
+            commands::get_character_studio_settings,
+            commands::get_avatar_rig_settings,
+            commands::get_public_call_settings,
             commands::get_stt_config,
             commands::get_tts_voice,
             commands::verify_voice_runtime,
@@ -51,10 +61,18 @@ pub fn run() {
             commands::start_twitch_oauth,
             commands::set_twitch_oauth_settings,
             commands::set_behavior_settings,
+            commands::set_scene_settings,
+            commands::set_character_studio_settings,
+            commands::set_avatar_rig_settings,
+            commands::set_public_call_settings,
             commands::set_stt_config,
             commands::set_tts_voice,
             commands::set_tts_volume,
             commands::synthesize_tts_cloud,
+            commands::get_backend_control_snapshot,
+            commands::start_backend_daemon,
+            commands::run_backend_console_command,
+            commands::launch_backend_terminal,
             commands::save_avatar_image,
             commands::get_saved_avatar_image,
             commands::auto_configure_stt_fast,
@@ -86,6 +104,9 @@ pub fn run() {
             commands::capture_mic_debug,
             commands::handle_voice_command,
             commands::submit_streamer_prompt,
+            commands::submit_voice_session_prompt,
+            commands::submit_voice_session_frame,
+            commands::rotate_public_call_token,
             commands::synthesize_tts_reaction,
         ])
         .run(tauri::generate_context!())

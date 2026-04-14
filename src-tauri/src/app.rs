@@ -16,8 +16,8 @@ use crate::{
     config::ProviderConfig,
     config::AppConfig,
     llm::provider::LlmService,
-    memory::store::MemoryStore,
-    personality::engine::{PersonalityEngine, PersonalityProfile},
+    memory::store::{MemoryRecord, MemoryStore},
+    personality::engine::PersonalityEngine,
     security::secret_store::SecretStore,
     search::service::SearchService,
     state::{AppState, ChatMessage, ConnectionState, DiagnosticsState, EventMessage, PipelineInput, SharedState},
@@ -91,8 +91,7 @@ pub fn bootstrap(app: AppHandle) -> Result<AppState, String> {
         let _ = config.save_to_disk();
     }
 
-    let profile = PersonalityEngine::load(&config.personality_path)
-        .unwrap_or_else(|_| PersonalityProfile::default());
+    let profile = config.personality.clone();
     let memory_dir = app
         .path()
         .app_data_dir()
@@ -506,12 +505,7 @@ fn build_memory_context(state: &SharedState, max_items: usize) -> Vec<String> {
     let mut priority = Vec::new();
     let mut recent = Vec::new();
     for m in records {
-        let user = m.user.unwrap_or_default();
-        let line = if user.is_empty() {
-            format!("[{}] {}", m.kind, m.content)
-        } else {
-            format!("[{}:{}] {}", m.kind, user, m.content)
-        };
+        let line = render_memory_record(&m);
         match m.kind.as_str() {
             "story_state" | "relationship_state" | "role_label" | "address_preference" | "explicit_memory" | "profile_fact" | "preference" | "goal" | "setup_fact" | "correction" | "priority_fact" | "bot_preference" => priority.push(line),
             _ => recent.push(line),
@@ -541,7 +535,7 @@ fn build_user_memory_context(state: &SharedState, user: &str, max_items: usize) 
         if !same_user(owner, user) {
             continue;
         }
-        let line = format!("[{}:{}] {}", m.kind, owner, m.content);
+        let line = render_memory_record(&m);
         match m.kind.as_str() {
             "address_preference" | "role_label" | "explicit_memory" | "profile_fact" | "relationship_state" | "correction" | "priority_fact" | "preference" | "goal" => direct.push(line),
             _ => other.push(line),
@@ -551,6 +545,99 @@ fn build_user_memory_context(state: &SharedState, user: &str, max_items: usize) 
     pinned.extend(other);
     pinned.truncate(max_items);
     pinned
+}
+
+fn compact_memory_value(value: &str, max_chars: usize) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn render_memory_record(record: &MemoryRecord) -> String {
+    if record.kind == "voice_frame" {
+        let metadata = record
+            .metadata
+            .clone()
+            .or_else(|| serde_json::from_str::<serde_json::Value>(&record.content).ok());
+        if let Some(meta) = metadata {
+            let transcript = meta
+                .get("transcript")
+                .and_then(|v| v.as_str())
+                .map(|v| compact_memory_value(v, 160))
+                .unwrap_or_else(|| compact_memory_value(&record.content, 160));
+            let normalized = meta
+                .get("normalizedTranscript")
+                .and_then(|v| v.as_str())
+                .map(|v| compact_memory_value(v, 120))
+                .filter(|v| !v.is_empty() && v != &transcript);
+            let subject = meta
+                .get("nameHint")
+                .and_then(|v| v.as_str())
+                .or(record.subject.as_deref())
+                .or(record.user.as_deref())
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or("speaker");
+            let command_hint = meta
+                .get("commandHint")
+                .and_then(|v| v.as_str())
+                .map(|v| compact_memory_value(v, 48))
+                .filter(|v| !v.is_empty());
+            let engine = meta
+                .get("engine")
+                .and_then(|v| v.as_str())
+                .map(|v| compact_memory_value(v, 24))
+                .filter(|v| !v.is_empty());
+            let mode = meta
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .map(|v| compact_memory_value(v, 24))
+                .filter(|v| !v.is_empty());
+            let time = meta
+                .get("timeContextIso")
+                .and_then(|v| v.as_str())
+                .map(|v| compact_memory_value(v, 32))
+                .filter(|v| !v.is_empty());
+
+            let mut details = Vec::new();
+            if let Some(value) = normalized {
+                details.push(format!("normalized=\"{value}\""));
+            }
+            if let Some(value) = command_hint {
+                details.push(format!("command={value}"));
+            }
+            if let Some(value) = engine {
+                details.push(format!("engine={value}"));
+            }
+            if let Some(value) = mode {
+                details.push(format!("mode={value}"));
+            }
+            if let Some(value) = time {
+                details.push(format!("time={value}"));
+            }
+
+            if details.is_empty() {
+                return format!("[voice_frame:{subject}] heard=\"{transcript}\"");
+            }
+            return format!(
+                "[voice_frame:{subject}] heard=\"{transcript}\" | {}",
+                details.join(" | ")
+            );
+        }
+    }
+
+    let user = record.user.as_deref().unwrap_or_default();
+    let content = compact_memory_value(&record.content, 180);
+    if user.is_empty() {
+        format!("[{}] {}", record.kind, content)
+    } else {
+        format!("[{}:{}] {}", record.kind, user, content)
+    }
 }
 
 fn recent_bot_story_context(state: &SharedState, max_items: usize) -> Vec<String> {
@@ -934,7 +1021,7 @@ async fn process_chat_input(
             )
         } else {
             format!(
-                "Viewer {} said: {}\nAnswer the actual point of that line first. Make at least one grounded statement or observation before asking anything. Reference one concrete detail from it. Only ask a short clarifying question if it is truly needed. Keep it under 28 words and stay on topic.\nCurrent speaker memory:\n{}",
+                "Viewer {} said: {}\nAnswer the actual point of that line first. Make at least one grounded statement or observation before asking anything. Reference one concrete detail from it. If the line appears garbled, incomplete, or low-confidence, return no reply instead of guessing. Keep it under 28 words and stay on topic.\nCurrent speaker memory:\n{}",
                 chat.user, chat.content, speaker_memory.join("\n")
             )
         }
@@ -951,7 +1038,7 @@ async fn process_chat_input(
             )
         } else {
             format!(
-                "Streamer {} said: {}\nThis is a live local cohost exchange. Reply in plain everyday language. Answer the literal latest line first. Only use recent chat or memory if it directly helps clarify the latest line. Do not invent scene details, weird metaphors, or theatrical phrasing. Reply in 1 or 2 conversational sentences under 42 words. Make a grounded statement first. Only ask a short plain clarification question if it is truly necessary.\nCurrent speaker memory:\n{}",
+                "Streamer {} said: {}\nThis is a live local cohost exchange. Reply in plain everyday language. Answer the literal latest line first. Only use recent chat or memory if it directly helps clarify the latest line. Do not invent scene details, weird metaphors, or theatrical phrasing. Reply in 1 or 2 conversational sentences under 42 words. Make a grounded statement first. Do not ask a follow-up question unless the user clearly asked one or asked for options. If the line appears garbled, incomplete, or low-confidence, return no reply instead of guessing.\nCurrent speaker memory:\n{}",
                 chat.user, chat.content, speaker_memory.join("\n")
             )
         }
@@ -1001,6 +1088,7 @@ async fn process_chat_input(
             if text.is_empty() || has_recent_bot_reply(state, &text) {
                 return;
             }
+            *state.llm_hiccup_notice_sent.write() = false;
             remember_bot_identity_facts(state, &text);
             if story_mode || keep_talking_mode {
                 append_memory_fact(
@@ -1018,6 +1106,15 @@ async fn process_chat_input(
             }
         }
         Err(err) => {
+            let _ = app.emit(
+                "timeline_event",
+                EventMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    kind: "llm_error".to_string(),
+                    content: format!("LLM generation failed: {err}"),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                },
+            );
             set_error(app, state, format!("LLM generation failed: {err}"));
             let should_announce = !*state.llm_hiccup_notice_sent.read();
             if should_announce {
@@ -1492,16 +1589,11 @@ fn spawn_scheduled_messages(app: AppHandle, state: AppState) {
             }
 
             let cfg = state.0.config.read().clone();
-            let cadence = if cfg.behavior.cohost_mode {
-                Some(chrono::Duration::milliseconds(
-                    cfg.moderation.minimum_reply_interval_ms.max(8_000) as i64,
-                ))
-            } else {
-                cfg.behavior
-                    .scheduled_messages_minutes
-                    .filter(|v| *v > 0)
-                    .map(|minutes| chrono::Duration::minutes(minutes as i64))
-            };
+            let cadence = cfg
+                .behavior
+                .scheduled_messages_minutes
+                .filter(|v| *v > 0)
+                .map(|minutes| chrono::Duration::minutes(minutes as i64));
 
             if let Some(cadence) = cadence {
                 if next_checkin_at.is_none() {

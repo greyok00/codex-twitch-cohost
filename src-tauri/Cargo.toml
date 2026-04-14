@@ -1,9 +1,10 @@
 [package]
 name = "twitch-cohost-bot"
-version = "0.1.0"
+version = "0.3.0"
 description = "Cloud-first Twitch cohost bot desktop app"
 authors = ["Twitch Cohost Bot Team"]
 edition = "2021"
+default-run = "twitch-cohost-bot"
 
 [lib]
 name = "twitch_cohost_bot_lib"

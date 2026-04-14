@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
-import type { AppStatus, AuthSessions, AvatarImage, BehaviorSettings, ChatMessage, DebugBundleResult, DiagnosticsState, EventMessage, MemorySnapshot, MicDebugView, PersonalityProfile, SelfTestReport, ServiceHealthReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceRuntimeReport } from '../types';
+import type { AppStatus, AuthSessions, AvatarImage, BackendControlSnapshot, BehaviorSettings, CharacterStudioSettings, ChatMessage, DebugBundleResult, DiagnosticsState, EventMessage, MemorySnapshot, MicDebugView, PersonalityProfile, PublicCallSettings, SceneSettings, SelfTestReport, ServiceHealthReport, SttAutoConfigResult, SttConfig, TtsVoiceSettings, VoiceInputFrame, VoiceRuntimeReport } from '../types';
 import type { RemarkGenerationRequest, RemarkResponse } from '../youtube/types';
 import { authSessionsStore, botLogStore, chatStore, debugBundleStore, diagnosticsStore, errorBannerStore, eventStore, personalityStore, selfTestReportStore, serviceHealthStore, statusStore } from '../stores/app';
 
@@ -31,6 +31,7 @@ export function stopBotSpeech(): void {
   ttsQueue = Promise.resolve();
   const runtime = getRuntimeFlags();
   runtime.__cohost_tts_speaking = false;
+  runtime.__cohost_tts_suppressed_until = Date.now() + 1800;
   try {
     window.speechSynthesis.cancel();
   } catch {
@@ -179,6 +180,27 @@ export async function getBehaviorSettings(): Promise<BehaviorSettings> {
   return invoke<BehaviorSettings>('get_behavior_settings');
 }
 
+export async function getSceneSettings(): Promise<SceneSettings> {
+  return invoke<SceneSettings>('get_scene_settings');
+}
+
+export async function setSceneSettings(
+  mode: SceneSettings['mode'],
+  maxTurnsBeforePause: number,
+  allowExternalTopicChanges: boolean,
+  secondaryCharacterSlug: string
+): Promise<void> {
+  await invoke('set_scene_settings', { mode, maxTurnsBeforePause, allowExternalTopicChanges, secondaryCharacterSlug });
+}
+
+export async function getCharacterStudioSettings(): Promise<CharacterStudioSettings> {
+  return invoke<CharacterStudioSettings>('get_character_studio_settings');
+}
+
+export async function setCharacterStudioSettings(input: CharacterStudioSettings): Promise<void> {
+  await invoke('set_character_studio_settings', { input });
+}
+
 export async function setBehaviorSettings(
   cohostMode: boolean,
   scheduledMessagesMinutes: number | null,
@@ -187,6 +209,18 @@ export async function setBehaviorSettings(
   topicContinuationMode?: boolean | null
 ): Promise<void> {
   await invoke('set_behavior_settings', { cohostMode, scheduledMessagesMinutes, minimumReplyIntervalMs, postBotMessagesToTwitch, topicContinuationMode });
+}
+
+export async function getPublicCallSettings(): Promise<PublicCallSettings> {
+  return invoke<PublicCallSettings>('get_public_call_settings');
+}
+
+export async function setPublicCallSettings(enabled: boolean, defaultCharacterSlug?: string | null): Promise<PublicCallSettings> {
+  return invoke<PublicCallSettings>('set_public_call_settings', { enabled, defaultCharacterSlug });
+}
+
+export async function rotatePublicCallToken(): Promise<PublicCallSettings> {
+  return invoke<PublicCallSettings>('rotate_public_call_token');
 }
 
 export async function searchWeb(query: string): Promise<string> {
@@ -261,6 +295,14 @@ export async function handleVoiceCommand(input: string): Promise<string> {
   return invoke<string>('handle_voice_command', { input });
 }
 
+export async function submitVoiceSessionPrompt(text: string, callerName?: string | null): Promise<void> {
+  await invoke('submit_voice_session_prompt', { text, callerName });
+}
+
+export async function submitVoiceSessionFrame(frame: VoiceInputFrame, callerName?: string | null): Promise<void> {
+  await invoke('submit_voice_session_frame', { frame, callerName });
+}
+
 export async function transcribeLocalAudio(base64Audio: string, mimeType: string): Promise<string> {
   return invoke<string>('transcribe_local_audio', { base64Audio, mimeType });
 }
@@ -313,6 +355,18 @@ export async function synthesizeTtsCloud(text: string, voiceName: string | null 
 
 export async function synthesizeTtsReaction(reaction: string, voiceName: string | null = null): Promise<string> {
   return invoke<string>('synthesize_tts_reaction', { reaction, voiceName });
+}
+
+export async function getBackendControlSnapshot(): Promise<BackendControlSnapshot> {
+  return invoke<BackendControlSnapshot>('get_backend_control_snapshot');
+}
+
+export async function startBackendDaemon(): Promise<BackendControlSnapshot> {
+  return invoke<BackendControlSnapshot>('start_backend_daemon');
+}
+
+export async function launchBackendTerminal(): Promise<void> {
+  await invoke('launch_backend_terminal');
 }
 
 export async function playLocalSpeech(text: string, voiceName: string | null = null, volumePercent?: number): Promise<void> {
@@ -416,6 +470,18 @@ export async function registerEventListeners(): Promise<void> {
     return text;
   }
 
+  function resolveBrowserTtsProfile(voiceName: string | null): {
+    engineVoiceHint: string | null;
+    rate: number;
+    pitch: number;
+  } {
+    return {
+      engineVoiceHint: voiceName,
+      rate: 0.97,
+      pitch: 1.02
+    };
+  }
+
   async function speakBotText(text: string, generation: number) {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     if (generation !== ttsGeneration) return;
@@ -429,6 +495,7 @@ export async function registerEventListeners(): Promise<void> {
     if (generation !== ttsGeneration) return;
     // Expose speaking state to mic capture loop so it can avoid feedback loops.
     runtime.__cohost_tts_speaking = true;
+    runtime.__cohost_tts_suppressed_until = Date.now() + 30_000;
     const clean = normalizeForSpeech(text);
     if (!clean) {
       runtime.__cohost_tts_speaking = false;
@@ -436,6 +503,7 @@ export async function registerEventListeners(): Promise<void> {
     }
     const liveVolume = runtimeTtsVolume ?? ttsVolume;
     const liveVoice = runtimeTtsVoiceName ?? ttsVoiceName;
+    const browserProfile = resolveBrowserTtsProfile(liveVoice);
 
     try {
       const dataUrl = await synthesizeTtsCloud(clean, liveVoice && liveVoice !== 'auto' ? liveVoice : null);
@@ -451,15 +519,18 @@ export async function registerEventListeners(): Promise<void> {
         };
         audio.onended = () => {
           runtimeTtsAudio = null;
+          runtime.__cohost_tts_suppressed_until = Date.now() + 1800;
           resolve();
         };
         audio.onerror = () => {
           runtimeTtsAudio = null;
+          runtime.__cohost_tts_suppressed_until = Date.now() + 1800;
           resolve();
         };
         void audio.play().catch(() => resolve());
       });
       runtime.__cohost_tts_speaking = false;
+      runtime.__cohost_tts_suppressed_until = Date.now() + 1800;
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
       return;
     } catch {
@@ -481,8 +552,8 @@ export async function registerEventListeners(): Promise<void> {
       'samantha'
     ];
     let selected = null as SpeechSynthesisVoice | null;
-    if (liveVoice && liveVoice !== 'auto') {
-      selected = voices.find((v) => v.name.toLowerCase().includes(liveVoice.toLowerCase())) ?? null;
+    if (browserProfile.engineVoiceHint && liveVoice && liveVoice !== 'auto') {
+      selected = voices.find((v) => v.name.toLowerCase().includes(browserProfile.engineVoiceHint!.toLowerCase())) ?? null;
     }
     if (!selected) {
       selected = voices.find((v) => {
@@ -498,14 +569,16 @@ export async function registerEventListeners(): Promise<void> {
       }) ?? null;
     }
     if (selected) utterance.voice = selected;
-    utterance.rate = 0.97;
-    utterance.pitch = 1.02;
+    utterance.rate = browserProfile.rate;
+    utterance.pitch = browserProfile.pitch;
     utterance.onend = () => {
       runtime.__cohost_tts_speaking = false;
+      runtime.__cohost_tts_suppressed_until = Date.now() + 1800;
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
     };
     utterance.onerror = () => {
       runtime.__cohost_tts_speaking = false;
+      runtime.__cohost_tts_suppressed_until = Date.now() + 1800;
       avatarChannel?.postMessage({ type: 'speak_stop', ts: Date.now() });
     };
     window.speechSynthesis.cancel();

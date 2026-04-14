@@ -1,0 +1,388 @@
+Milestones and Final-Stage Chunks
+
+Rule:
+- Each chunk reaches FINAL only when implementation, failure mapping, automated validation, and manual validation criteria all exist.
+- No chunk is marked FINAL because it "basically works."
+
+Chunk 1: Config and state authority
+Scope:
+- config.json as the single rules authority
+- no conflicting personality/behavior/settings files
+- clear split between config, secrets, memory, and ephemeral UI state
+
+Final criteria:
+- one authoritative config path for behavior/personality/scene/voice
+- state hydration is deterministic
+- no settings drift between frontend and backend
+- no silent localStorage override of core behavior
+
+Must test:
+- backend read/write roundtrip
+- migration from legacy config paths
+- restart persistence
+
+Chunk 2: Voice session orchestration
+Scope:
+- mic start/stop
+- session lifecycle
+- interim/final transcript handling
+- processing/replying transitions
+- error and restart recovery
+
+Final criteria:
+- no stuck listening
+- no stuck processing
+- no stuck replying
+- state transitions always recover cleanly
+- reply timing metrics exposed
+
+Must test:
+- session start/stop loop
+- repeated restart
+- forced error recovery
+- long idle recovery
+
+Chunk 3: Browser STT primary path
+Scope:
+- browser speech recognition
+- interim transcript display
+- final commit behavior
+- restart on session end
+- echo suppression
+
+Final criteria:
+- interim transcript is responsive
+- only final transcript enters memory/chat flow
+- no self-hearing from TTS in normal operation
+- ambient noise is dropped
+- weak fragments are ignored
+
+Must test:
+- browser speech available
+- browser speech unavailable fallback
+- TTS active while mic active
+- ambient noise phrases
+- long sentence commit accuracy
+
+Chunk 4: Local STT fallback
+Scope:
+- Vosk fallback
+- model resolution
+- helper script and audio preprocessing
+- headless fallback testing
+
+Final criteria:
+- fallback activates only when needed
+- local STT is measurable and reproducible
+- headless smoke exists
+- no app hang when fallback is active
+
+Must test:
+- headless fallback smoke
+- model discovery
+- transcription timeout handling
+- missing-model failure clarity
+
+Chunk 5: TTS output
+Scope:
+- edge-tts synthesis
+- browser TTS fallback
+- playback queueing
+- interruption behavior
+- speech normalization
+
+Final criteria:
+- bot speaks reliably
+- bot can be interrupted by user speech
+- TTS never wedges the whole session
+- no leaked system prompt text is spoken
+- speech normalization removes junk formatting
+
+Must test:
+- headless TTS smoke
+- repeated synth requests
+- interrupted playback
+- browser fallback
+
+Chunk 6: Self-echo and ambient suppression
+Scope:
+- TTS suppression window
+- bot self-loop prevention
+- ambient-noise rejection
+- bot-message reingestion prevention
+
+Final criteria:
+- bot does not reply to itself
+- TTS does not feed back into STT under normal setup
+- common ambient phrases never hit memory/chat/LLM
+
+Must test:
+- bot speaking while mic active
+- delayed echo tail
+- Twitch bot-message ignore path
+- local bot-response ignore path
+
+Chunk 7: Chat and reply engine
+Scope:
+- local chat
+- Twitch chat
+- reply cadence
+- command path
+- keep-talking mode
+- anti-repeat logic
+
+Final criteria:
+- controls actually change behavior
+- bot does not spam
+- keep-talking continues the subject
+- question-loop behavior is suppressed
+- local vs Twitch posting is explicit and respected
+
+Must test:
+- local-only mode
+- Twitch-connected but bot-local mode
+- cadence changes
+- mention reply path
+- repeated prompt anti-duplication
+
+Chunk 8: Memory and continuity
+Scope:
+- salient fact extraction
+- pinned memory
+- user-specific memory retrieval
+- story continuity
+- correction precedence
+
+Final criteria:
+- names/titles/preferences are retained
+- corrections override stale memory
+- story continuity survives multiple turns
+- memory retrieval is relevant rather than raw-log heavy
+
+Must test:
+- repeated recall cases
+- contradiction/correction case
+- pinned memory precedence
+- keep-talking/story continuation case
+
+Chunk 9: Character system
+Scope:
+- preset characters
+- slider tuning
+- default voice mapping
+- preset packaging
+
+Final criteria:
+- character switch updates voice/personality reliably
+- presets feel coherent
+- no dropdown-style ambiguity
+- default voice and style are coupled per character
+
+Must test:
+- preset switch persistence
+- slider effect persistence
+- voice mapping on preset change
+
+Chunk 10: Avatar system
+Scope:
+- shared embedded renderer
+- optional detached shell only if needed later
+- rig controls
+- jar styling
+- lip sync
+- path to GPU-backed renderer for higher realism
+
+Final criteria:
+- embedded avatar is primary
+- no duplicated control surfaces
+- rig settings persist
+- speech animation plays in embedded runtime
+- no separate legacy popup runtime remains active
+- renderer abstraction exists so DOM/CSS rig can be replaced by WebGPU / wgpu without changing character data
+
+Must test:
+- embedded render
+- detach if retained
+- rig persistence
+- speech animation start/stop
+- window/container resizing
+
+Chunk 10A: GPU character renderer
+Scope:
+- WebGPU / wgpu-backed character stage
+- shader lighting
+- mesh or quad deformation for mouth, eyes, brows, and head motion
+- realistic popout and nested stage parity
+
+Final criteria:
+- current avatar data model maps cleanly into the GPU renderer
+- nested and detached stages use the same renderer core
+- renderer degrades gracefully when WebGPU is unavailable
+- realistic motion is materially better than the DOM/CSS fallback
+
+Must test:
+- capability detection
+- fallback path when GPU is unavailable
+- long-session renderer stability
+- lip sync and brow sync timing
+- consistent render output between nested and detached stages
+
+Chunk 11: Twitch integration
+Scope:
+- auth sessions
+- bot/streamer role separation
+- IRC join/send
+- EventSub startup
+- channel routing
+
+Final criteria:
+- role separation is explicit and correct
+- bot account is never silently swapped with streamer account
+- bot posting toggle is honored
+- Twitch disconnect stays disconnected
+
+Must test:
+- auth role separation
+- connect/disconnect loop
+- bot-local mode while connected
+- mention reply
+
+Chunk 11A: External live context and Twitch event widgets
+Scope:
+- backend-owned EventSub/IRC event aggregation
+- web search ingestion with timestamps and source metadata
+- operator-facing stats/notification/timeline/command-palette widgets
+- no raw external event spam into the chat feed
+
+Final criteria:
+- external context is source-tagged and time-tagged
+- Twitch event widgets are fed by backend events, not frontend guesses
+- operator widgets reflect live runtime and stream state accurately
+- web search data can be injected later without redesigning the UI or backend model
+
+
+Chunk 11B: Screen vision observer
+Scope:
+- backend-owned screen observer subprocess
+- screenshot/window capture selection
+- sampled frame analysis with local multimodal models
+- structured JSON observation events for scene and memory
+- no raw caption spam into chat or permanent memory
+
+Final criteria:
+- screen analysis never blocks the UI thread
+- frame sampling cadence is bounded and configurable
+- structured observations are timestamped, source-tagged, and confidence-tagged
+- scene layer can consume vision summaries without treating them as direct user speech
+- observer can be disabled without affecting local voice or Twitch chat
+
+Must test:
+- idle sampling cadence
+- active-scene faster cadence
+- missing-GPU or missing-model fallback
+- observer subprocess crash and restart
+- no direct raw-caption posting into chat
+
+Must test:
+- EventSub event ingestion
+- IRC event aggregation
+- notification/timeline rendering from backend payloads
+- stale external data rejection
+- command palette action dispatch
+
+Chunk 12: Diagnostics and self-test
+Scope:
+- service health
+- voice verification
+- self-test
+- debug bundle/export
+
+Final criteria:
+- diagnostics reflect real runtime state
+- warnings are meaningful, not noise
+- voice verification can run without launching full UI manually
+- failure reasons are actionable
+
+Must test:
+- self-test output validity
+- voice runtime smoke
+- health state transitions
+
+Chunk 13: Headless backend and control plane
+Scope:
+- backend runtime detached from the UI shell
+- optional CLI/daemon execution mode
+- local control surface for frontend clients
+- backend survives frontend restarts
+- child-process supervision for failure isolation
+
+Final criteria:
+- core runtime can run without the Tauri window
+- the frontend can act as a controller instead of the only runtime shell
+- core services can be inspected and controlled headlessly
+- voice/status smoke can target the backend directly
+- STT/TTS/LLM jobs can be supervised and restarted without killing the parent runtime
+
+Must test:
+- headless runtime boot
+- prompt via detached runtime
+- headless voice smoke via detached runtime
+- supervised worker restart/timeout path
+- frontend attach/detach
+- backend continues running after UI exit
+- CLI health/status command path
+
+Chunk 14: Public call link foundation
+Scope:
+- lightweight public shell
+- shared voice-session runtime
+- token/config path
+
+Final criteria:
+- route separation exists
+- public shell does not load owner dashboard
+- shared session logic is reused
+
+Must test:
+- route load
+- voice-session startup on public path
+
+Chunk 15: Performance and anti-freeze
+Scope:
+- worker-backed hot paths
+- bounded concurrency
+- minimized rerenders
+- runtime timing instrumentation
+
+Final criteria:
+- no main-thread churn from transcript flood
+- no heavy inactive panel rendering
+- no runaway memory growth in normal use
+- timing instrumentation exists for STT -> AI -> TTS
+
+Must test:
+- sustained mic session
+- repeated tab switches
+- repeated character changes
+- long feed accumulation
+
+Execution order
+1. Config and state authority
+2. Voice session orchestration
+3. Browser STT primary path
+4. TTS output
+5. Self-echo and ambient suppression
+6. Chat and reply engine
+7. Memory and continuity
+8. Avatar system
+9. Character system
+10. Twitch integration
+11. Diagnostics and self-test
+12. Headless backend and control plane
+13. Performance and anti-freeze
+14. Public call link foundation
+
+Definition of done for the app
+- Every chunk above is FINAL
+- Release build matches dev behavior
+- Remaining known issues are non-blocking

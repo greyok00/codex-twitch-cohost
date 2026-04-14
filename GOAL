@@ -1,0 +1,223 @@
+Codex Twitch Cohost: Stable Goal and Milestone Plan
+
+Version target for the current refactor line:
+- Current working target: 0.4.0
+- 1.0.0 is reserved for a stable, predictable conversational character platform
+
+1.0.0 stable definition
+
+The app is 1.0.0 stable only when all of the following are true:
+
+1. Local voice conversation
+- Browser speech starts reliably
+- Interim transcript appears quickly
+- Final transcript commits cleanly
+- The bot does not respond to itself
+- Ambient noise is ignored instead of being turned into chat
+- TTS does not block future turns forever
+- Stopping and restarting the mic recovers cleanly
+
+2. Twitch operation
+- Twitch connect and disconnect are deterministic
+- Bot posting mode is explicit and respected
+- Local-only mode works without leaking bot messages into Twitch
+- Twitch chat messages, local messages, and bot messages do not cross-contaminate
+- Bot mentions, commands, and lurk behavior work predictably
+
+3. Character system
+- Character selection feels like choosing a packaged persona
+- Each character has:
+  - display identity
+  - default voice
+  - personality tuning
+  - avatar
+  - memory style
+  - scene defaults
+- Changing character updates behavior consistently
+- Character switching does not corrupt runtime state
+
+4. Memory
+- Memory is not just a chat log
+- Important facts are extracted and reused
+- Corrections override stale facts
+- Story continuity is preserved when keep-talking/story mode is enabled
+- Memory growth remains bounded and queryable
+- Memory retrieval prefers relevant facts over stale noise
+
+5. Avatar
+- Embedded avatar is the primary runtime
+- Detached avatar is optional, not primary
+- Embedded and detached avatar use the same renderer and rig logic
+- Mouth and brow rigging persist reliably
+- TTS animation does not drift badly or freeze
+- The avatar does not require a separate legacy page or duplicated controls
+- The renderer has a clean upgrade path from 2D rigging to a WebGPU / wgpu-backed character stage
+- Future character rendering can support realistic lighting, mesh deformation, and full 3D character presentation without changing the character data model
+
+6. UI and settings
+- One clear design system across the app
+- Only active settings panels render
+- Controls update live behavior immediately
+- No duplicated controls for the same feature
+- Desktop and mobile use the same core runtime and layout model
+
+7. Headless backend separation
+- The conversational runtime can run without the desktop UI
+- The frontend is a controller/client, not the owner of the core runtime
+- A CLI or daemon mode can run STT/TTS/chat/memory pipelines without opening a window
+- Runtime health and voice checks can be inspected without launching the UI
+- The architecture allows future local or remote clients to control the same runtime
+
+8. Stability
+- No freeze during normal use
+- No unbounded rerender loop
+- No zombie speaking state
+- No stale mic session that never recovers
+- No duplicated config sources fighting each other
+- No routine crashes from long sessions, voice churn, or tab changes
+
+9. Diagnostics and automation
+- Self-test is meaningful
+- Voice runtime can be verified headlessly
+- The app has a documented automated validation path
+- Every major subsystem has explicit completion criteria
+
+10. External live context and operator awareness
+- External live context is backend-owned, not a frontend hack
+- Future web search data is source-tagged, time-tagged, and injected safely
+- Twitch notifications and stream events can drive operator-facing widgets
+- Sampled screen observations can be injected through a dedicated observer subprocess
+- Stats, notifications, timeline, and command palette surfaces reflect real backend/runtime signals
+- External data never pollutes conversation context without explicit filtering and recency rules
+- Screen vision observations are stored as structured summaries, never as uncontrolled raw captions
+
+Milestones
+
+Milestone 0.4.0: architecture and control reliability
+- Unified config path for core behavior
+- Shared avatar runtime
+- Browser speech as primary live STT
+- Right-side controls actually mutate backend behavior
+- Headless local voice smoke path
+- Output normalization fixes for repetitive/opening filler
+
+Done means:
+- build passes
+- lint passes
+- cargo tests pass
+- local voice smoke script passes
+- no duplicated popup/avatar logic remains in the live path
+
+Milestone 0.5.0: voice stability
+- Bot never responds to itself in normal operation
+- Browser speech restart and suppression logic is reliable
+- Ambient noise rejection is stricter
+- TTS state cannot wedge the mic
+- Session diagnostics expose timing and restart counters clearly
+
+Done means:
+- 3 clean local voice sessions in a row
+- no self-reply loop
+- no stuck speaking state
+- no stuck listening state
+
+Milestone 0.6.0: memory and continuity
+- Structured memory wins over raw log spam
+- Pinned memory is respected
+- Names, titles, and relationship details persist
+- Keep-talking mode produces continuation rather than question loops
+
+Done means:
+- repeated recall tests pass
+- corrections override old facts
+- story continuation survives multiple turns
+
+Milestone 0.7.0: Twitch hardening
+- Twitch join/leave is deterministic
+- Bot local/Twitch posting separation is reliable
+- mention replies and commands are reliable
+- lurk and cadence settings behave exactly as configured
+
+Done means:
+- no unwanted bot posting in local mode
+- no accidental reconnect loops
+- Twitch-side command behavior matches local diagnostics
+
+Milestone 0.8.0: public voice session foundation
+- Public call link flow exists on the shared voice session runtime
+- Lightweight public shell
+- clear owner/public separation
+- no admin-dashboard bloat on the public route
+
+Done means:
+- public route works on the shared voice-session architecture
+- public shell remains lightweight
+
+Milestone 0.9.0: scene and character maturity
+- Solo mode stable
+- scene state ready for duo/topic expansion
+- preset characters feel like coherent packaged personas
+- default voice mapping per character is solid
+
+Done means:
+- switching characters does not destabilize voice, memory, or avatar state
+
+Milestone 0.9.5: detached runtime and control plane
+- Headless backend mode exists
+- UI can act as a controller instead of the only runtime shell
+- Runtime health and command/status inspection work without opening the UI
+- Voice smoke and service checks run against the backend directly
+
+Done means:
+- backend can run without the Tauri window
+- the frontend can connect to and control that runtime
+- core conversation services survive UI restarts
+
+Milestone 1.0.0: stable release
+- all core loops are reliable
+- release build behavior matches dev behavior
+- diagnostics, docs, and automated verification are trustworthy
+- no critical freeze, state corruption, or self-loop issues remain
+
+Automation strategy
+
+What can be tested headlessly now:
+- TypeScript/Svelte compile and diagnostics
+- production build
+- Rust unit tests
+- harness tests
+- detached `cohostd` backend boot
+- detached `cohostd` prompt path
+- detached `cohostd` voice smoke through native TTS + local STT
+- local fallback STT smoke via Vosk model and helper script
+
+What the architecture must support next:
+- the frontend as a thin controller over `cohostd`
+- a local control surface for the frontend
+- backend child-process health/status commands for STT, TTS, LLM, and Twitch
+- the UI as an optional shell rather than the only execution path
+- backend-owned external live context ingestion for web search, Twitch events, and screen observation
+- sampled screen observer pipeline using structured JSON summaries from multimodal vision models such as qwen2.5vl, gemma3, or llama3.2-vision
+- operator widgets driven by backend signals: stats, notifications, timeline, command palette, gauges
+
+What cannot be fully trusted headlessly:
+- browser speech recognition quality
+- real microphone hardware routing
+- speaker echo and room feedback behavior
+- live Twitch auth/account flow
+- actual user-perceived voice naturalness
+
+Testing rule
+
+A subsystem is not marked complete just because the feature exists.
+A subsystem is complete only when:
+- failure modes are known
+- automated verification exists where possible
+- manual validation criteria are explicit where automation is not enough
+- recovery behavior is defined
+
+No section is considered done until:
+- implementation exists
+- regression path is documented
+- validation path exists
+- known edge cases are mapped

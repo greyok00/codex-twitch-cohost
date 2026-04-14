@@ -1,8 +1,6 @@
-use std::fs;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{error::{AppError, AppResult}, state::{ChatMessage, EventMessage}};
+use crate::state::{ChatMessage, EventMessage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonalityProfile {
@@ -78,28 +76,6 @@ impl PersonalityEngine {
             .join("\n")
     }
 
-    pub fn load(path: &str) -> AppResult<PersonalityProfile> {
-        if std::path::Path::new(path).exists() {
-            let raw = fs::read_to_string(path)
-                .map_err(|e| AppError::Config(format!("failed reading personality file: {e}")))?;
-            let profile: PersonalityProfile = serde_json::from_str(&raw)
-                .map_err(|e| AppError::Config(format!("invalid personality JSON: {e}")))?;
-            Ok(profile)
-        } else {
-            Ok(PersonalityProfile::default())
-        }
-    }
-
-    pub fn save(path: &str, profile: &PersonalityProfile) -> AppResult<()> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| AppError::Config(format!("failed creating personality dir: {e}")))?;
-        }
-        let rendered = serde_json::to_string_pretty(profile)?;
-        fs::write(path, rendered)
-            .map_err(|e| AppError::Config(format!("failed writing personality file: {e}")))
-    }
-
     pub fn build_prompt(
         profile: &PersonalityProfile,
         recent_chat: &[ChatMessage],
@@ -155,7 +131,7 @@ impl PersonalityEngine {
             - Never pivot to a random old topic unless the latest message clearly calls for it.\n\
             - Default to statements, observations, reactions, or scene continuation. Do not keep ending replies with questions.\n\
             - Ask a question only when it is genuinely useful, emotionally natural, or necessary to resolve ambiguity.\n\
-            - If confidence is low, say what you think you heard, make one grounded statement, and only then ask one short follow-up if needed.\n\
+            - If the latest voice input appears incomplete, garbled, low-confidence, or contaminated by ambient noise, do not reply at all.\n\
             - Do not open with random insults or empty roasting.\n\
             - Use plain everyday language, not fantasy, occult, cosmic, or theatrical phrasing unless the user directly does that first.\n\
             - Roast only when it is clearly earned by context.\n\
@@ -166,6 +142,18 @@ impl PersonalityEngine {
             - Output only spoken dialogue that should actually be said aloud in chat or TTS.\n\
             - If the user asks for a story, scene, romance, or ongoing bit, continue it with concrete details instead of interrogating the user.\n\
             - Maintain stable tastes, dislikes, and recurring preferences over time when memory supports them.\n\
+            - Keep this structured-input protocol in working memory for the entire session.\n\
+            \n\
+            Structured input protocol:\n\
+            - Some memory lines are machine-generated voice_frame records built from a JSON voice session envelope.\n\
+            - voice_frame records summarize one finalized utterance after transcript cleanup and timing analysis.\n\
+            - In a voice_frame line, heard= is the committed speech content to react to first.\n\
+            - normalized= is a cleanup aid, not a second separate user request.\n\
+            - command=, subject=, engine=, mode=, and time= are support signals for intent and context.\n\
+            - Treat the newest voice_frame lines as higher-confidence evidence than stale or fragmented transcript scraps.\n\
+            - Use structured memory to reinforce continuity, names, preferences, and scene state across turns.\n\
+            - Never mention JSON, schema names, field names, or machine formatting unless the user directly asks about them.\n\
+            - Never quote the raw memory line verbatim unless the user explicitly asks what you remember.\n\
             \n\
             Recent chat:\n{chat_lines}\n\
             Recent events:\n{event_lines}\n\

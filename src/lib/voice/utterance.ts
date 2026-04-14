@@ -51,6 +51,35 @@ export function isNonSpeechCaption(value: string): boolean {
   return false;
 }
 
+const AMBIENT_NOISE_PATTERNS = [
+  /^(water|water splashing|splashing|splashing water|running water|dripping water|rain|rain falling)$/i,
+  /^(wind|wind noise|fan noise|air conditioner|ac noise|static|white noise|background noise|noise)$/i,
+  /^(keyboard|keyboard clicking|typing|mouse clicking|clicking|door|door closing|knocking|footsteps)$/i,
+  /^(breathing|heavy breathing|snoring|coughing|sneezing|mumbling|whispering|background conversation)$/i,
+  /^(music playing|music|applause|laughter|laughing|crowd noise)$/i
+];
+
+const LOW_SIGNAL_EXACT = /^(uh|um|huh|hmm+|mm+|ah|oh|er|uhh|umm|hm|mhm)$/i;
+
+export function isAmbientNoiseTranscript(value: string): boolean {
+  const text = (value || '').trim().toLowerCase();
+  if (!text) return true;
+  if (isNonSpeechCaption(text)) return true;
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return true;
+  if (AMBIENT_NOISE_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length <= 2) {
+    if (LOW_SIGNAL_EXACT.test(normalized)) return true;
+    if (words.every((word) => ['water', 'splashing', 'noise', 'wind', 'rain', 'static', 'music', 'typing', 'clicking', 'door', 'footsteps', 'breathing'].includes(word))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function seemsWeakTranscript(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return true;

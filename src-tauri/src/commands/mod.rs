@@ -17,8 +17,10 @@ use crate::{
     app,
     browser::service::{open_isolated_twitch_url, open_url_with_fallback, validate_and_open},
     error::{AppError, AppResult},
-    personality::engine::{PersonalityEngine, PersonalityProfile},
+    headless::{HeadlessStatus, HealthLight, ModuleHealth},
+    personality::engine::PersonalityProfile,
     state::{AppState, ChatMessage, ConnectionState, PipelineInput},
+    tts::edge_tts_candidates,
     twitch::eventsub::{smoke_test_streamer_api, EventSubStartConfig},
     twitch::oauth,
     voice::{commands::{parse_voice_command, VoiceCommand}, native_mic, stt},
@@ -129,6 +131,477 @@ fn first_existing(candidates: &[PathBuf]) -> Option<String> {
         .iter()
         .find(|p| p.exists())
         .map(|p| p.to_string_lossy().to_string())
+}
+
+fn normalize_voice_gate_text(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendModuleView {
+    pub name: String,
+    pub light: String,
+    pub message: String,
+    pub restarts: u32,
+    pub last_started_at: Option<String>,
+    pub last_finished_at: Option<String>,
+    pub last_duration_ms: Option<u128>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendControlSnapshot {
+    pub connected: bool,
+    pub addr: String,
+    pub status: Option<HeadlessStatus>,
+    pub modules: Vec<BackendModuleView>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendConsoleResult {
+    pub ok: bool,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    pub snapshot: BackendControlSnapshot,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendControlResponse {
+    ok: bool,
+    result: Option<String>,
+    error: Option<String>,
+    status: Option<HeadlessStatus>,
+    modules: BTreeMap<String, ModuleHealth>,
+}
+
+fn map_health_light(light: &HealthLight) -> String {
+    match light {
+        HealthLight::Red => "red".to_string(),
+        HealthLight::Yellow => "yellow".to_string(),
+        HealthLight::Green => "green".to_string(),
+    }
+}
+
+fn backend_control_addr() -> String {
+    if let Ok(addr) = std::env::var("COHOSTD_ADDR") {
+        return addr;
+    }
+    #[cfg(unix)]
+    {
+        return std::env::temp_dir()
+            .join("cohostd.sock")
+            .to_string_lossy()
+            .to_string();
+    }
+    #[cfg(windows)]
+    {
+        "127.0.0.1:44777".to_string()
+    }
+}
+
+fn map_backend_modules(modules: BTreeMap<String, ModuleHealth>) -> Vec<BackendModuleView> {
+    modules
+        .into_iter()
+        .map(|(name, module)| BackendModuleView {
+            name,
+            light: map_health_light(&module.light),
+            message: module.message,
+            restarts: module.restarts,
+            last_started_at: module.last_started_at,
+            last_finished_at: module.last_finished_at,
+            last_duration_ms: module.last_duration_ms,
+        })
+        .collect::<Vec<_>>()
+}
+
+fn map_backend_snapshot(
+    addr: String,
+    ok: bool,
+    status: Option<HeadlessStatus>,
+    modules: BTreeMap<String, ModuleHealth>,
+    error: Option<String>,
+    result: Option<String>,
+) -> BackendControlSnapshot {
+    BackendControlSnapshot {
+        connected: ok,
+        addr,
+        status,
+        modules: map_backend_modules(modules),
+        error: error.or(result.filter(|v| v != "ok")),
+    }
+}
+
+fn detect_cohostd_binary(app_handle: Option<&AppHandle>) -> Option<PathBuf> {
+    let exe_name = if cfg!(target_os = "windows") { "cohostd.exe" } else { "cohostd" };
+    let mut candidates = Vec::new();
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(parent) = current.parent() {
+            candidates.push(parent.join(exe_name));
+        }
+    }
+    if let Some(app) = app_handle {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            candidates.push(resource_dir.join(exe_name));
+            candidates.push(resource_dir.join("bin").join(exe_name));
+            if let Some(parent) = resource_dir.parent() {
+                candidates.push(parent.join("MacOS").join(exe_name));
+            }
+        }
+    }
+    candidates.push(PathBuf::from("./src-tauri/target/debug").join(exe_name));
+    candidates.push(PathBuf::from("./target/debug").join(exe_name));
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn cohostd_cargo_manifest() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")
+}
+
+async fn query_backend_snapshot(app_handle: &AppHandle) -> Result<BackendControlSnapshot, String> {
+    let addr = backend_control_addr();
+    let mut cmd = if let Some(bin) = detect_cohostd_binary(Some(app_handle)) {
+        let mut cmd = Command::new(&bin);
+        cmd.arg("call").arg("status");
+        cmd
+    } else if command_in_path("cargo") {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("run")
+            .arg("--quiet")
+            .arg("--manifest-path")
+            .arg(cohostd_cargo_manifest())
+            .arg("--bin")
+            .arg("cohostd")
+            .arg("--")
+            .arg("call")
+            .arg("status");
+        cmd
+    } else {
+        return Ok(BackendControlSnapshot {
+            connected: false,
+            addr,
+            status: None,
+            modules: Vec::new(),
+            error: Some("cohostd binary not found".to_string()),
+        });
+    };
+    let output = timeout(Duration::from_secs(8), cmd.output())
+        .await
+        .map_err(|_| "backend status timed out".to_string())?
+        .map_err(|e| format!("backend status launch failed: {e}"))?;
+    if !output.status.success() {
+        return Ok(BackendControlSnapshot {
+            connected: false,
+            addr,
+            status: None,
+            modules: Vec::new(),
+            error: Some(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        });
+    }
+    let response: BackendControlResponse = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("invalid backend status payload: {e}"))?;
+    Ok(map_backend_snapshot(
+        addr,
+        response.ok,
+        response.status,
+        response.modules,
+        response.error,
+        response.result,
+    ))
+}
+
+async fn spawn_backend_daemon(app_handle: &AppHandle) -> Result<(), String> {
+    if query_backend_snapshot(app_handle).await.ok().is_some_and(|v| v.connected) {
+        return Ok(());
+    }
+    let mut cmd = if let Some(bin) = detect_cohostd_binary(Some(app_handle)) {
+        let mut cmd = Command::new(&bin);
+        cmd.arg("daemon");
+        cmd
+    } else if command_in_path("cargo") {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("run")
+            .arg("--quiet")
+            .arg("--manifest-path")
+            .arg(cohostd_cargo_manifest())
+            .arg("--bin")
+            .arg("cohostd")
+            .arg("--")
+            .arg("daemon");
+        cmd
+    } else {
+        return Err("cohostd binary not found".to_string());
+    };
+    let _child = cmd
+        .spawn()
+        .map_err(|e| format!("failed spawning cohostd daemon: {e}"))?;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if query_backend_snapshot(app_handle).await.ok().is_some_and(|v| v.connected) {
+            return Ok(());
+        }
+    }
+    Err("cohostd daemon did not become ready in time".to_string())
+}
+
+pub async fn startup_spawn_backend_daemon(app_handle: &AppHandle) -> Result<(), String> {
+    spawn_backend_daemon(app_handle).await
+}
+
+async fn run_backend_control_request(
+    app_handle: &AppHandle,
+    command: &str,
+    text: Option<&str>,
+    path: Option<&str>,
+    label: Option<&str>,
+    content: Option<&str>,
+) -> Result<BackendConsoleResult, String> {
+    let addr = backend_control_addr();
+    let mut cmd = if let Some(bin) = detect_cohostd_binary(Some(app_handle)) {
+        let mut cmd = Command::new(&bin);
+        cmd.arg("call").arg(command);
+        cmd
+    } else if command_in_path("cargo") {
+        let mut cmd = Command::new("cargo");
+        cmd.arg("run")
+            .arg("--quiet")
+            .arg("--manifest-path")
+            .arg(cohostd_cargo_manifest())
+            .arg("--bin")
+            .arg("cohostd")
+            .arg("--")
+            .arg("call")
+            .arg(command);
+        cmd
+    } else {
+        return Err("cohostd binary not found".to_string());
+    };
+
+    match command {
+        "prompt" | "tts" | "voice-smoke" => {
+            if let Some(value) = text.map(str::trim).filter(|v| !v.is_empty()) {
+                cmd.arg(value);
+            }
+        }
+        "stt-file" => {
+            if let Some(value) = path.map(str::trim).filter(|v| !v.is_empty()) {
+                cmd.arg(value);
+            }
+        }
+        "pin" => {
+            let joined = format!(
+                "{}::{}",
+                label.map(str::trim).unwrap_or_default(),
+                content.map(str::trim).unwrap_or_default()
+            );
+            cmd.arg(joined);
+        }
+        "pins" | "status" => {}
+        other => return Err(format!("unsupported backend control command: {other}")),
+    }
+
+    let output = timeout(Duration::from_secs(15), cmd.output())
+        .await
+        .map_err(|_| format!("backend command '{command}' timed out"))?
+        .map_err(|e| format!("backend command '{command}' failed to launch: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(BackendConsoleResult {
+            ok: false,
+            output: None,
+            error: Some(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            snapshot: BackendControlSnapshot {
+                connected: false,
+                addr,
+                status: None,
+                modules: Vec::new(),
+                error: Some("backend command failed".to_string()),
+            },
+        });
+    }
+
+    let response: BackendControlResponse = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("invalid backend command payload: {e}"))?;
+    let snapshot = map_backend_snapshot(
+        addr,
+        response.ok,
+        response.status,
+        response.modules,
+        response.error.clone(),
+        response.result.clone(),
+    );
+    Ok(BackendConsoleResult {
+        ok: response.ok,
+        output: response.result,
+        error: response.error,
+        snapshot,
+    })
+}
+
+fn spawn_backend_terminal_process(bin: Option<&PathBuf>) -> Result<(), String> {
+    let command_line = if let Some(bin) = bin {
+        format!("\"{}\" shell", bin.to_string_lossy())
+    } else if command_in_path("cargo") {
+        format!(
+            "cargo run --manifest-path \"{}\" --bin cohostd -- shell",
+            cohostd_cargo_manifest().to_string_lossy()
+        )
+    } else {
+        return Err("cohostd binary not found".to_string());
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let candidates: Vec<(&str, Vec<String>)> = vec![
+            (
+                "x-terminal-emulator",
+                vec![
+                    "-e".to_string(),
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    command_line.clone(),
+                ],
+            ),
+            (
+                "gnome-terminal",
+                vec![
+                    "--".to_string(),
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    command_line.clone(),
+                ],
+            ),
+            (
+                "konsole",
+                vec![
+                    "-e".to_string(),
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    command_line.clone(),
+                ],
+            ),
+            (
+                "xfce4-terminal",
+                vec![
+                    "--command".to_string(),
+                    command_line.clone(),
+                ],
+            ),
+            (
+                "mate-terminal",
+                vec![
+                    "--command".to_string(),
+                    command_line.clone(),
+                ],
+            ),
+            (
+                "xterm",
+                vec![
+                    "-e".to_string(),
+                    command_line.clone(),
+                ],
+            ),
+        ];
+        for (terminal, args) in candidates {
+            if !command_in_path(terminal) {
+                continue;
+            }
+            let mut cmd = std::process::Command::new(terminal);
+            cmd.args(args);
+            if cmd.spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        return Err("no supported terminal emulator found".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "tell application \"Terminal\" to do script \"{} shell\"",
+            bin.to_string_lossy().replace('\"', "\\\"")
+        );
+        std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .spawn()
+            .map_err(|e| format!("failed to launch Terminal: {e}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args([
+                "/K",
+                &format!("\"{}\" shell", bin.to_string_lossy()),
+            ])
+            .spawn()
+            .map_err(|e| format!("failed to launch console: {e}"))?;
+        return Ok(());
+    }
+}
+
+fn should_drop_voice_transcript(value: &str) -> bool {
+    let normalized = normalize_voice_gate_text(value);
+    if normalized.is_empty() {
+        return true;
+    }
+    if matches!(
+        normalized.as_str(),
+        "water"
+            | "water splashing"
+            | "splashing"
+            | "running water"
+            | "dripping water"
+            | "rain"
+            | "wind"
+            | "wind noise"
+            | "fan noise"
+            | "static"
+            | "white noise"
+            | "background noise"
+            | "noise"
+            | "keyboard"
+            | "keyboard clicking"
+            | "typing"
+            | "clicking"
+            | "door"
+            | "door closing"
+            | "knocking"
+            | "footsteps"
+            | "breathing"
+            | "heavy breathing"
+            | "coughing"
+            | "sneezing"
+            | "background conversation"
+            | "mumbling"
+            | "music"
+            | "music playing"
+            | "applause"
+            | "laughter"
+            | "laughing"
+    ) {
+        return true;
+    }
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
+    if words.len() <= 2
+        && matches!(
+            normalized.as_str(),
+            "uh" | "um" | "huh" | "hmm" | "hm" | "mm" | "ah" | "oh" | "er" | "uhh" | "umm"
+        )
+    {
+        return true;
+    }
+    false
 }
 
 fn command_in_path(name: &str) -> bool {
@@ -486,110 +959,8 @@ fn silence_wav_base64(duration_ms: u32) -> String {
     base64::engine::general_purpose::STANDARD.encode(out)
 }
 
-fn edge_tts_candidates() -> Vec<String> {
-    let mut bins = Vec::new();
-    if let Ok(bin) = std::env::var("COHOST_EDGE_TTS_BIN") {
-        if !bin.trim().is_empty() {
-            bins.push(bin);
-        }
-    }
-    bins.push("../.venv-edge-tts/bin/edge-tts".to_string());
-    bins.push("./.venv-edge-tts/bin/edge-tts".to_string());
-    bins.push("edge-tts".to_string());
-    bins
-}
-
 async fn synthesize_tts_cloud_with_voice(clean: &str, voice: &str) -> Result<String, String> {
-    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
-    let audio_path = tmp.path().join("edge_tts.mp3");
-    let mut last_err: Option<String> = None;
-    let mut rate_pct: i32 = 8;
-    let mut pitch_hz: i32 = 10;
-    let lowered = clean.to_lowercase();
-    let exclamations = clean.matches('!').count() as i32;
-    let questions = clean.matches('?').count() as i32;
-    let ellipses = clean.matches("...").count() as i32;
-
-    let excited_hits = [
-        "oh my god", "omg", "wow", "holy", "yes", "yesss", "let's go", "lets go",
-        "baby", "daddy", "please", "come on", "right now", "good girl", "good boy",
-        "love that", "need that", "so good", "perfect"
-    ]
-    .iter()
-    .filter(|needle| lowered.contains(**needle))
-    .count() as i32;
-
-    let soft_hits = [
-        "sleepy", "soft", "slow", "calm", "easy", "gentle", "quiet", "hush", "whisper",
-        "sweet", "tender", "closer", "come here", "relax", "breathe", "mm", "mmm"
-    ]
-    .iter()
-    .filter(|needle| lowered.contains(**needle))
-    .count() as i32;
-
-    rate_pct += (exclamations * 3).min(9);
-    pitch_hz += (exclamations * 4).min(14);
-    pitch_hz += (questions * 3).min(9);
-
-    if excited_hits > 0 {
-        rate_pct += (excited_hits * 2).min(8);
-        pitch_hz += (excited_hits * 3).min(12);
-    }
-
-    if ellipses > 0 || soft_hits > 0 {
-        rate_pct -= (ellipses * 4).min(8) + (soft_hits * 2).min(10);
-        pitch_hz -= (soft_hits * 2).min(8);
-    }
-
-    if lowered.contains("serious") || lowered.contains("calm") {
-        rate_pct -= 4;
-        pitch_hz -= 1;
-    }
-
-    rate_pct = rate_pct.clamp(-18, 24);
-    pitch_hz = pitch_hz.clamp(-8, 28);
-
-    let rate_arg = format!("{rate_pct:+}%");
-    let pitch_arg = format!("{pitch_hz:+}Hz");
-
-    for bin in edge_tts_candidates() {
-        let mut cmd = Command::new(&bin);
-        cmd.arg("--voice")
-            .arg(voice)
-            .arg("--rate")
-            .arg(&rate_arg)
-            .arg("--pitch")
-            .arg(&pitch_arg)
-            .arg("--text")
-            .arg(clean)
-            .arg("--write-media")
-            .arg(&audio_path);
-
-        let run = timeout(Duration::from_secs(20), cmd.output()).await;
-        match run {
-            Ok(Ok(output)) => {
-                if output.status.success() && audio_path.exists() {
-                    let bytes = tokio::fs::read(&audio_path)
-                        .await
-                        .map_err(|e| format!("failed reading synthesized audio: {e}"))?;
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                    return Ok(format!("data:audio/mpeg;base64,{b64}"));
-                }
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                last_err = Some(format!("edge-tts failed for {bin}: {}", stderr.trim()));
-            }
-            Ok(Err(e)) => {
-                last_err = Some(format!("edge-tts launch failed for {bin}: {e}"));
-            }
-            Err(_) => {
-                last_err = Some(format!("edge-tts timed out for {bin}"));
-            }
-        }
-    }
-
-    Err(last_err.unwrap_or_else(|| {
-        "edge-tts not available; install it and set COHOST_EDGE_TTS_BIN if needed".to_string()
-    }))
+    crate::tts::synthesize_tts_with_voice(clean, voice).await
 }
 
 async fn try_download_fast_whisper_model(app_handle: &AppHandle) -> Result<Option<String>, String> {
@@ -1201,6 +1572,63 @@ pub struct BehaviorSettingsView {
     pub topic_continuation_mode: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneSettingsView {
+    pub mode: String,
+    pub max_turns_before_pause: u8,
+    pub allow_external_topic_changes: bool,
+    pub secondary_character_slug: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CharacterStudioSettingsView {
+    pub selected_preset: String,
+    pub warmth: u8,
+    pub humor: u8,
+    pub flirt: u8,
+    pub edge: u8,
+    pub energy: u8,
+    pub story: u8,
+    pub extra_direction: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvatarRigSettingsView {
+    pub mouth_x: i16,
+    pub mouth_y: i16,
+    pub mouth_width: u16,
+    pub mouth_open: u16,
+    pub mouth_softness: u16,
+    pub mouth_smile: i16,
+    pub mouth_tilt: i16,
+    pub mouth_color: String,
+    pub brow_x: i16,
+    pub brow_y: i16,
+    pub brow_spacing: u16,
+    pub brow_arch: i16,
+    pub brow_tilt: i16,
+    pub brow_thickness: u16,
+    pub brow_color: String,
+    pub eye_open: u16,
+    pub eye_squint: u16,
+    pub head_tilt: i16,
+    pub head_scale: u16,
+    pub glow: u16,
+    pub popup_width: u16,
+    pub popup_height: u16,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicCallSettingsView {
+    pub enabled: bool,
+    pub token: String,
+    pub default_character_slug: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SttConfigView {
@@ -1319,6 +1747,20 @@ pub struct MemorySnapshotView {
 pub struct PinnedMemoryInput {
     pub label: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceInputFramePayload {
+    pub session_id: String,
+    pub mode: String,
+    pub engine: String,
+    pub transcript: String,
+    pub normalized_transcript: String,
+    pub command_hint: Option<String>,
+    pub name_hint: Option<String>,
+    pub time_context_iso: String,
+    pub final_latency_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1904,6 +2346,57 @@ pub async fn set_behavior_settings(
 }
 
 #[tauri::command]
+pub async fn get_public_call_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<PublicCallSettingsView, String> {
+    let cfg = state.0.config.read().clone();
+    Ok(PublicCallSettingsView {
+        enabled: cfg.public_call.enabled,
+        token: cfg.public_call.token,
+        default_character_slug: cfg.public_call.default_character_slug,
+    })
+}
+
+#[tauri::command]
+pub async fn set_public_call_settings(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+    default_character_slug: Option<String>,
+) -> Result<PublicCallSettingsView, String> {
+    let mut cfg = state.0.config.write();
+    cfg.public_call.enabled = enabled;
+    if let Some(slug) = default_character_slug {
+        let clean = slug.trim();
+        if !clean.is_empty() {
+            cfg.public_call.default_character_slug = clean.to_string();
+        }
+    }
+    if cfg.public_call.token.trim().is_empty() {
+        cfg.public_call.token = uuid::Uuid::new_v4().to_string();
+    }
+    cfg.save_to_disk().map_err(|e| e.to_string())?;
+    Ok(PublicCallSettingsView {
+        enabled: cfg.public_call.enabled,
+        token: cfg.public_call.token.clone(),
+        default_character_slug: cfg.public_call.default_character_slug.clone(),
+    })
+}
+
+#[tauri::command]
+pub async fn rotate_public_call_token(
+    state: tauri::State<'_, AppState>,
+) -> Result<PublicCallSettingsView, String> {
+    let mut cfg = state.0.config.write();
+    cfg.public_call.token = uuid::Uuid::new_v4().to_string();
+    cfg.save_to_disk().map_err(|e| e.to_string())?;
+    Ok(PublicCallSettingsView {
+        enabled: cfg.public_call.enabled,
+        token: cfg.public_call.token.clone(),
+        default_character_slug: cfg.public_call.default_character_slug.clone(),
+    })
+}
+
+#[tauri::command]
 pub async fn get_stt_config(state: tauri::State<'_, AppState>) -> Result<SttConfigView, String> {
     let cfg = state.0.config.read().clone();
     Ok(SttConfigView {
@@ -2265,6 +2758,43 @@ pub async fn synthesize_tts_reaction(
         _ => return Err("reaction is required".to_string()),
     };
     synthesize_tts_cloud_with_voice(&cue, voice).await
+}
+
+#[tauri::command]
+pub async fn get_backend_control_snapshot(app_handle: AppHandle) -> Result<BackendControlSnapshot, String> {
+    query_backend_snapshot(&app_handle).await
+}
+
+#[tauri::command]
+pub async fn start_backend_daemon(app_handle: AppHandle) -> Result<BackendControlSnapshot, String> {
+    spawn_backend_daemon(&app_handle).await?;
+    query_backend_snapshot(&app_handle).await
+}
+
+#[tauri::command]
+pub async fn run_backend_console_command(
+    app_handle: AppHandle,
+    command: String,
+    text: Option<String>,
+    path: Option<String>,
+    label: Option<String>,
+    content: Option<String>,
+) -> Result<BackendConsoleResult, String> {
+    run_backend_control_request(
+        &app_handle,
+        command.trim(),
+        text.as_deref(),
+        path.as_deref(),
+        label.as_deref(),
+        content.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn launch_backend_terminal(app_handle: AppHandle) -> Result<(), String> {
+    let bin = detect_cohostd_binary(Some(&app_handle));
+    spawn_backend_terminal_process(bin.as_ref())
 }
 
 #[tauri::command]
@@ -3735,10 +4265,140 @@ pub async fn set_personality_profile(
     state: tauri::State<'_, AppState>,
     profile: PersonalityProfile,
 ) -> Result<(), String> {
-    PersonalityEngine::save(&state.0.config.read().personality_path, &profile)
-        .map_err(|e| e.to_string())?;
     *state.0.personality.write() = profile;
+    {
+        let mut cfg = state.0.config.write();
+        cfg.personality = state.0.personality.read().clone();
+        map_err(cfg.save_to_disk())?;
+    }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_scene_settings(state: tauri::State<'_, AppState>) -> Result<SceneSettingsView, String> {
+    let scene = state.0.config.read().scene.clone();
+    Ok(SceneSettingsView {
+        mode: scene.mode,
+        max_turns_before_pause: scene.max_turns_before_pause,
+        allow_external_topic_changes: scene.allow_external_topic_changes,
+        secondary_character_slug: scene.secondary_character_slug,
+    })
+}
+
+#[tauri::command]
+pub async fn set_scene_settings(
+    state: tauri::State<'_, AppState>,
+    mode: String,
+    max_turns_before_pause: u8,
+    allow_external_topic_changes: bool,
+    secondary_character_slug: String,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.scene.mode = match mode.trim() {
+        "dual_debate" => "dual_debate".to_string(),
+        "chat_topic" => "chat_topic".to_string(),
+        _ => "solo".to_string(),
+    };
+    cfg.scene.max_turns_before_pause = max_turns_before_pause.clamp(1, 6);
+    cfg.scene.allow_external_topic_changes = allow_external_topic_changes;
+    cfg.scene.secondary_character_slug = secondary_character_slug.trim().to_string();
+    map_err(cfg.save_to_disk())
+}
+
+#[tauri::command]
+pub async fn get_character_studio_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<CharacterStudioSettingsView, String> {
+    let studio = state.0.config.read().character_studio.clone();
+    Ok(CharacterStudioSettingsView {
+        selected_preset: studio.selected_preset,
+        warmth: studio.warmth,
+        humor: studio.humor,
+        flirt: studio.flirt,
+        edge: studio.edge,
+        energy: studio.energy,
+        story: studio.story,
+        extra_direction: studio.extra_direction,
+    })
+}
+
+#[tauri::command]
+pub async fn set_character_studio_settings(
+    state: tauri::State<'_, AppState>,
+    input: CharacterStudioSettingsView,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.character_studio.selected_preset = input.selected_preset.trim().to_string();
+    cfg.character_studio.warmth = input.warmth.clamp(0, 100);
+    cfg.character_studio.humor = input.humor.clamp(0, 100);
+    cfg.character_studio.flirt = input.flirt.clamp(0, 100);
+    cfg.character_studio.edge = input.edge.clamp(0, 100);
+    cfg.character_studio.energy = input.energy.clamp(0, 100);
+    cfg.character_studio.story = input.story.clamp(0, 100);
+    cfg.character_studio.extra_direction = input.extra_direction.trim().to_string();
+    map_err(cfg.save_to_disk())
+}
+
+#[tauri::command]
+pub async fn get_avatar_rig_settings(
+    state: tauri::State<'_, AppState>,
+) -> Result<AvatarRigSettingsView, String> {
+    let rig = state.0.config.read().avatar_rig.clone();
+    Ok(AvatarRigSettingsView {
+        mouth_x: rig.mouth_x,
+        mouth_y: rig.mouth_y,
+        mouth_width: rig.mouth_width,
+        mouth_open: rig.mouth_open,
+        mouth_softness: rig.mouth_softness,
+        mouth_smile: rig.mouth_smile,
+        mouth_tilt: rig.mouth_tilt,
+        mouth_color: rig.mouth_color,
+        brow_x: rig.brow_x,
+        brow_y: rig.brow_y,
+        brow_spacing: rig.brow_spacing,
+        brow_arch: rig.brow_arch,
+        brow_tilt: rig.brow_tilt,
+        brow_thickness: rig.brow_thickness,
+        brow_color: rig.brow_color,
+        eye_open: rig.eye_open,
+        eye_squint: rig.eye_squint,
+        head_tilt: rig.head_tilt,
+        head_scale: rig.head_scale,
+        glow: rig.glow,
+        popup_width: rig.popup_width,
+        popup_height: rig.popup_height,
+    })
+}
+
+#[tauri::command]
+pub async fn set_avatar_rig_settings(
+    state: tauri::State<'_, AppState>,
+    input: AvatarRigSettingsView,
+) -> Result<(), String> {
+    let mut cfg = state.0.config.write();
+    cfg.avatar_rig.mouth_x = input.mouth_x.clamp(-100, 100);
+    cfg.avatar_rig.mouth_y = input.mouth_y.clamp(-100, 100);
+    cfg.avatar_rig.mouth_width = input.mouth_width.clamp(10, 90);
+    cfg.avatar_rig.mouth_open = input.mouth_open.clamp(0, 100);
+    cfg.avatar_rig.mouth_softness = input.mouth_softness.clamp(0, 100);
+    cfg.avatar_rig.mouth_smile = input.mouth_smile.clamp(-60, 60);
+    cfg.avatar_rig.mouth_tilt = input.mouth_tilt.clamp(-45, 45);
+    cfg.avatar_rig.mouth_color = input.mouth_color.trim().to_string();
+    cfg.avatar_rig.brow_x = input.brow_x.clamp(-80, 80);
+    cfg.avatar_rig.brow_y = input.brow_y.clamp(-100, 100);
+    cfg.avatar_rig.brow_spacing = input.brow_spacing.clamp(12, 90);
+    cfg.avatar_rig.brow_arch = input.brow_arch.clamp(-50, 50);
+    cfg.avatar_rig.brow_tilt = input.brow_tilt.clamp(-45, 45);
+    cfg.avatar_rig.brow_thickness = input.brow_thickness.clamp(2, 30);
+    cfg.avatar_rig.brow_color = input.brow_color.trim().to_string();
+    cfg.avatar_rig.eye_open = input.eye_open.clamp(0, 100);
+    cfg.avatar_rig.eye_squint = input.eye_squint.clamp(0, 100);
+    cfg.avatar_rig.head_tilt = input.head_tilt.clamp(-30, 30);
+    cfg.avatar_rig.head_scale = input.head_scale.clamp(60, 150);
+    cfg.avatar_rig.glow = input.glow.clamp(0, 100);
+    cfg.avatar_rig.popup_width = input.popup_width.clamp(220, 640);
+    cfg.avatar_rig.popup_height = input.popup_height.clamp(240, 760);
+    map_err(cfg.save_to_disk())
 }
 
 #[tauri::command]
@@ -3905,35 +4565,95 @@ pub async fn submit_streamer_prompt(
     state: tauri::State<'_, AppState>,
     text: String,
 ) -> Result<(), String> {
+    submit_voice_session_prompt_internal(&app_handle, &state.0, text, None).await
+}
+
+async fn submit_voice_session_prompt_internal(
+    app_handle: &AppHandle,
+    shared: &std::sync::Arc<crate::state::SharedState>,
+    text: String,
+    caller_name: Option<String>,
+) -> Result<(), String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(());
     }
-    let user = state
-        .0
+    let configured = shared
         .config
         .read()
         .twitch
         .broadcaster_login
         .clone()
         .unwrap_or_else(|| "streamer".to_string());
+    let user = caller_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&configured)
+        .to_string();
     let chat = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        user: user.clone(),
+        user,
         content: trimmed.to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         is_bot: false,
     };
-    // Local streamer prompts stay local; do not send to Twitch chat.
     let _ = app_handle.emit("chat_message", &chat);
     map_err(
-        state
-            .0
+        shared
             .response_queue_tx
             .send(PipelineInput::LocalChat(chat))
             .await
             .map_err(|e| AppError::Internal(e.to_string())),
     )
+}
+
+async fn submit_voice_session_frame_internal(
+    app_handle: &AppHandle,
+    shared: &std::sync::Arc<crate::state::SharedState>,
+    frame: VoiceInputFramePayload,
+    caller_name: Option<String>,
+) -> Result<(), String> {
+    if should_drop_voice_transcript(&frame.transcript)
+        || should_drop_voice_transcript(&frame.normalized_transcript)
+    {
+        return Ok(());
+    }
+    let frame_json = serde_json::to_string(&frame).map_err(|e| e.to_string())?;
+    let _ = shared.memory.append_structured(
+        "voice_frame",
+        caller_name.as_deref(),
+        &frame_json,
+        frame.name_hint.clone().or_else(|| caller_name.clone()),
+        3,
+        vec![
+            frame.mode.clone(),
+            frame.engine.clone(),
+            "voice-frame".to_string(),
+        ],
+        serde_json::to_value(&frame).ok(),
+    );
+    submit_voice_session_prompt_internal(app_handle, shared, frame.transcript, caller_name).await
+}
+
+#[tauri::command]
+pub async fn submit_voice_session_prompt(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    text: String,
+    caller_name: Option<String>,
+) -> Result<(), String> {
+    submit_voice_session_prompt_internal(&app_handle, &state.0, text, caller_name).await
+}
+
+#[tauri::command]
+pub async fn submit_voice_session_frame(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    frame: VoiceInputFramePayload,
+    caller_name: Option<String>,
+) -> Result<(), String> {
+    submit_voice_session_frame_internal(&app_handle, &state.0, frame, caller_name).await
 }
 
 #[cfg(test)]
