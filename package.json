@@ -18,12 +18,8 @@
     "backend:cli": "cargo run --manifest-path src-tauri/Cargo.toml --bin cohostd --"
   },
   "dependencies": {
-    "@emotion/react": "^11.14.0",
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource/manrope": "^5.2.8",
-    "@mantine/core": "^9.0.2",
-    "@mantine/hooks": "^9.0.2",
-    "@mantine/notifications": "^9.0.2",
     "@radix-ui/react-scroll-area": "^1.2.10",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-separator": "^1.1.8",
