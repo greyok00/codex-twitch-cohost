@@ -34,7 +34,7 @@ const GlassTextarea = React.forwardRef<HTMLTextAreaElement, GlassTextareaProps>(
         >
           {glowOnFocus && (
             <motion.div
-              className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-cyan-500/0 via-blue-500/0 to-purple-500/0 blur-md group-focus-within:from-cyan-500/30 group-focus-within:via-blue-500/30 group-focus-within:to-purple-500/30 transition-all duration-300"
+              className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-white/0 via-white/0 to-white/0 blur-md group-focus-within:from-white/10 group-focus-within:via-white/8 group-focus-within:to-white/10 transition-all duration-300"
               aria-hidden="true"
             />
           )}
@@ -47,7 +47,7 @@ const GlassTextarea = React.forwardRef<HTMLTextAreaElement, GlassTextareaProps>(
               "shadow-[0_4px_16px_rgba(0,0,0,0.2)]",
               "transition-all duration-300 resize-none",
               "focus:outline-none focus:border-white/40 focus:bg-white/15",
-              "focus:ring-2 focus:ring-cyan-400/30 focus:ring-offset-0",
+              "focus:ring-2 focus:ring-white/10 focus:ring-offset-0",
               "disabled:cursor-not-allowed disabled:opacity-50",
               error && "border-red-400/50 focus:border-red-400/70 focus:ring-red-400/30",
               className,

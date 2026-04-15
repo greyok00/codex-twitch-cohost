@@ -6,7 +6,7 @@ type BuildMessage = {
   payload: {
     sessionId: string;
     mode: 'owner' | 'public';
-    engine: 'local-fallback' | 'none';
+    engine: 'assemblyai-realtime' | 'local-fallback' | 'none';
     transcript: string;
     finalLatencyMs?: number | null;
   };

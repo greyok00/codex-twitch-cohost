@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  AssemblyAiStreamingToken,
   AppStatus,
   AuthSessions,
   AvatarImage,
@@ -11,8 +12,11 @@ import type {
   CharacterStudioSettings,
   ChatMessage,
   EventMessage,
+  LiveSttEvent,
+  MicDebugView,
   PersonalityProfile,
   SttAutoConfigResult,
+  SttSetupProgress,
   TwitchOauthSettings,
   TtsVoiceSettings,
   VoiceInputFrame,
@@ -37,6 +41,14 @@ export function onStatusUpdated(handler: (payload: AppStatus) => void): Promise<
 
 export function onErrorBanner(handler: (payload: string) => void): Promise<UnlistenFn> {
   return listen<string>('error_banner', (event) => handler(String(event.payload || '')));
+}
+
+export function onSttSetupProgress(handler: (payload: SttSetupProgress) => void): Promise<UnlistenFn> {
+  return listen<SttSetupProgress>('stt_setup_progress', (event) => handler(event.payload));
+}
+
+export function onLiveSttEvent(handler: (payload: LiveSttEvent) => void): Promise<UnlistenFn> {
+  return listen<LiveSttEvent>('live_stt_event', (event) => handler(event.payload));
 }
 
 export function getStatus(): Promise<AppStatus> {
@@ -84,7 +96,9 @@ export function setBehaviorSettings(input: BehaviorSettings): Promise<void> {
     scheduledMessagesMinutes: input.scheduledMessagesMinutes ?? null,
     minimumReplyIntervalMs: input.minimumReplyIntervalMs ?? null,
     postBotMessagesToTwitch: input.postBotMessagesToTwitch ?? false,
-    topicContinuationMode: input.topicContinuationMode ?? false
+    topicContinuationMode: input.topicContinuationMode ?? false,
+    replyLengthMode: input.replyLengthMode ?? 'natural',
+    allowBriefReactions: input.allowBriefReactions ?? true
   });
 }
 
@@ -114,6 +128,10 @@ export function verifyVoiceRuntime(): Promise<VoiceRuntimeReport> {
 
 export function autoConfigureSttFast(): Promise<SttAutoConfigResult> {
   return invoke('auto_configure_stt_fast');
+}
+
+export function captureMicDebug(durationMs: number): Promise<MicDebugView> {
+  return invoke('capture_mic_debug', { durationMs });
 }
 
 export function setVoiceEnabled(enabled: boolean): Promise<void> {
@@ -184,6 +202,22 @@ export function setProviderApiKey(providerName: string, apiKey: string): Promise
   return invoke('set_provider_api_key', { providerName, apiKey });
 }
 
+export function createAssemblyAiStreamingToken(expiresInSeconds = 60, maxSessionDurationSeconds = 3600): Promise<AssemblyAiStreamingToken> {
+  return invoke('create_assemblyai_streaming_token', { expiresInSeconds, maxSessionDurationSeconds });
+}
+
+export function startAssemblyAiLiveStt(): Promise<void> {
+  return invoke('start_assemblyai_live_stt');
+}
+
+export function stopAssemblyAiLiveStt(): Promise<void> {
+  return invoke('stop_assemblyai_live_stt');
+}
+
+export function setAssemblyAiLiveSttPaused(paused: boolean): Promise<void> {
+  return invoke('set_assemblyai_live_stt_paused', { paused });
+}
+
 export function getProviderModels(providerName: string): Promise<string[]> {
   return invoke('get_provider_models', { providerName });
 }
@@ -194,6 +228,14 @@ export function configureCloudOnlyMode(model: string): Promise<void> {
 
 export function openExternal(url: string): Promise<void> {
   return invoke('open_external_url', { url });
+}
+
+export function clearMemory(): Promise<void> {
+  return invoke('clear_memory');
+}
+
+export function openMemoryLog(): Promise<void> {
+  return invoke('open_memory_log');
 }
 
 export function savePersonality(profile: PersonalityProfile): Promise<void> {

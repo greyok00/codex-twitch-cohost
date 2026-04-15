@@ -14,7 +14,7 @@ function getWorker(): Worker | null {
 export async function buildVoiceInputFrame(input: {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'local-fallback' | 'none';
+  engine: 'assemblyai-realtime' | 'local-fallback' | 'none';
   transcript: string;
   finalLatencyMs?: number | null;
 }): Promise<VoiceInputFrame> {

@@ -4,12 +4,18 @@ use std::sync::Arc;
 #[cfg(not(target_os = "windows"))]
 use std::os::unix::fs::PermissionsExt;
 
+use futures_util::{SinkExt, StreamExt};
+use once_cell::sync::Lazy;
 use tauri::{AppHandle, Emitter, Manager};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use base64::Engine;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::sync::{Mutex, watch};
 use tokio::time::{timeout, Duration};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
 
 use crate::{
     app,
@@ -26,6 +32,24 @@ use crate::{
 
 fn map_err<T>(value: AppResult<T>) -> Result<T, String> {
     value.map_err(|e| e.to_string())
+}
+
+struct AssemblyAiLiveSessionHandle {
+    stop_tx: watch::Sender<bool>,
+    pause_tx: watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+static ASSEMBLYAI_LIVE_SESSION: Lazy<Mutex<Option<AssemblyAiLiveSessionHandle>>> =
+    Lazy::new(|| Mutex::new(None));
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveSttEvent {
+    pub kind: String,
+    pub text: Option<String>,
+    pub detail: Option<String>,
+    pub backend: Option<String>,
 }
 
 async fn acquire_stt_permit(
@@ -599,6 +623,50 @@ fn should_drop_voice_transcript(value: &str) -> bool {
     false
 }
 
+fn is_voice_interrupt_or_wake(value: &str) -> bool {
+    let normalized = normalize_voice_gate_text(value);
+    if normalized.is_empty() {
+        return false;
+    }
+    normalized.contains("chatbot")
+        || normalized.contains("chat bot")
+        || normalized.contains("robot")
+        || matches!(
+            normalized.as_str(),
+            "stop"
+                | "wait"
+                | "hold on"
+                | "quiet"
+                | "pause"
+                | "continue"
+                | "resume"
+                | "go on"
+                | "keep going"
+                | "hang on"
+        )
+}
+
+fn should_emit_live_stt_transcript(value: &str, end_of_turn: bool) -> bool {
+    if should_drop_voice_transcript(value) {
+        return false;
+    }
+    let normalized = normalize_voice_gate_text(value);
+    if normalized.is_empty() {
+        return false;
+    }
+    let word_count = normalized.split_whitespace().count();
+    if word_count == 0 {
+        return false;
+    }
+    if is_voice_interrupt_or_wake(&normalized) {
+        return true;
+    }
+    if !end_of_turn {
+        return word_count >= 2 || normalized.len() >= 4;
+    }
+    !(word_count == 1 && normalized.len() < 8)
+}
+
 fn command_in_path(name: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;
@@ -644,13 +712,16 @@ fn emit_stt_progress(app_handle: &AppHandle, stage: &str, progress: u8, message:
 }
 
 fn detect_vosk_python_runtime() -> Option<String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = if cfg!(target_os = "windows") {
         vec![
+            manifest_dir.join("../.venv-vosk/Scripts/python.exe"),
             PathBuf::from("./.venv-vosk/Scripts/python.exe"),
             PathBuf::from("../.venv-vosk/Scripts/python.exe"),
         ]
     } else {
         vec![
+            manifest_dir.join("../.venv-vosk/bin/python"),
             PathBuf::from("./.venv-vosk/bin/python"),
             PathBuf::from("../.venv-vosk/bin/python"),
         ]
@@ -660,6 +731,7 @@ fn detect_vosk_python_runtime() -> Option<String> {
 
 fn detect_vosk_model(app_handle: Option<&AppHandle>) -> Option<String> {
     let mut candidates: Vec<PathBuf> = Vec::new();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let model_names = [
         "vosk-model-en-us-0.22",
         "vosk-model-en-us-0.22-lgraph",
@@ -679,7 +751,9 @@ fn detect_vosk_model(app_handle: Option<&AppHandle>) -> Option<String> {
         }
     }
     for name in model_names {
+        candidates.push(manifest_dir.join("assets").join("vosk").join(name));
         candidates.push(PathBuf::from("./src-tauri/assets/vosk").join(name));
+        candidates.push(PathBuf::from("./assets/vosk").join(name));
     }
     if let Ok(home) = std::env::var("HOME") {
         for name in model_names {
@@ -1263,6 +1337,8 @@ pub struct BehaviorSettingsView {
     pub minimum_reply_interval_ms: Option<u64>,
     pub post_bot_messages_to_twitch: bool,
     pub topic_continuation_mode: bool,
+    pub reply_length_mode: String,
+    pub allow_brief_reactions: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1284,6 +1360,7 @@ pub struct CharacterStudioSettingsView {
     pub edge: u8,
     pub energy: u8,
     pub story: u8,
+    pub profanity_allowed: bool,
     pub extra_direction: String,
 }
 
@@ -1563,6 +1640,16 @@ async fn build_voice_runtime_report(
     state: &AppState,
 ) -> Result<VoiceRuntimeReport, String> {
     let cfg = state.0.config.read().voice.clone();
+    let assemblyai_key = state
+        .0
+        .secrets
+        .get_provider_key("assemblyai")
+        .ok()
+        .flatten()
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        });
     let mut checks: Vec<VoiceRuntimeCheck> = Vec::new();
     let mut stt_ready = false;
     let mut tts_ready = false;
@@ -1582,7 +1669,54 @@ async fn build_voice_runtime_report(
         });
     };
 
-    if cfg.stt_enabled {
+    if let Some(api_key) = assemblyai_key {
+        push(
+            "STT backend",
+            "pass",
+            "Using AssemblyAI realtime streaming STT.".to_string(),
+        );
+        push(
+            "STT key",
+            "pass",
+            "AssemblyAI API key is saved in secure storage.".to_string(),
+        );
+
+        let client = reqwest::Client::new();
+        let response = timeout(
+            Duration::from_secs(15),
+            client
+                .get("https://streaming.assemblyai.com/v3/token?expires_in_seconds=60&max_session_duration_seconds=300")
+                .header("Authorization", api_key)
+                .send(),
+        )
+        .await;
+
+        match response {
+            Ok(Ok(resp)) if resp.status().is_success() => {
+                stt_ready = true;
+                push(
+                    "STT process smoke test",
+                    "pass",
+                    "AssemblyAI issued a temporary realtime token.".to_string(),
+                );
+            }
+            Ok(Ok(resp)) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_else(|_| "<empty>".to_string());
+                push(
+                    "STT process smoke test",
+                    "fail",
+                    format!("AssemblyAI token request failed with {status}: {body}"),
+                );
+            }
+            Ok(Err(err)) => push("STT process smoke test", "fail", err.to_string()),
+            Err(_) => push(
+                "STT process smoke test",
+                "fail",
+                "Timed out while requesting AssemblyAI realtime token.".to_string(),
+            ),
+        }
+    } else if cfg.stt_enabled {
         let requested_bin = cfg.stt_binary_path.clone().unwrap_or_default();
         let resolved_bin = if can_execute_binary(&requested_bin) {
             Some(requested_bin)
@@ -1655,7 +1789,7 @@ async fn build_voice_runtime_report(
         push(
             "STT enabled",
             "warn",
-            "STT is disabled in settings. Enable STT for mic transcription.".to_string(),
+            "No AssemblyAI key is configured and local STT is disabled.".to_string(),
         );
     }
 
@@ -1999,6 +2133,8 @@ pub async fn get_behavior_settings(
         minimum_reply_interval_ms: Some(cfg.moderation.minimum_reply_interval_ms),
         post_bot_messages_to_twitch: cfg.behavior.post_bot_messages_to_twitch,
         topic_continuation_mode: cfg.behavior.topic_continuation_mode,
+        reply_length_mode: cfg.behavior.reply_length_mode,
+        allow_brief_reactions: cfg.behavior.allow_brief_reactions,
     })
 }
 
@@ -2010,6 +2146,8 @@ pub async fn set_behavior_settings(
     minimum_reply_interval_ms: Option<u64>,
     post_bot_messages_to_twitch: Option<bool>,
     topic_continuation_mode: Option<bool>,
+    reply_length_mode: Option<String>,
+    allow_brief_reactions: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.0.config.write();
     cfg.behavior.cohost_mode = cohost_mode;
@@ -2022,6 +2160,16 @@ pub async fn set_behavior_settings(
     }
     if let Some(value) = topic_continuation_mode {
         cfg.behavior.topic_continuation_mode = value;
+    }
+    if let Some(value) = reply_length_mode {
+        let lowered = value.trim().to_lowercase();
+        cfg.behavior.reply_length_mode = match lowered.as_str() {
+            "short" | "natural" | "long" => lowered,
+            _ => "natural".to_string(),
+        };
+    }
+    if let Some(value) = allow_brief_reactions {
+        cfg.behavior.allow_brief_reactions = value;
     }
     cfg.save_to_disk().map_err(|e| e.to_string())
 }
@@ -3306,6 +3454,19 @@ async fn connect_twitch_chat_internal(
             .await
         {
             let _ = app_handle.emit("error_banner", format!("EventSub start failed: {err}"));
+            let _ = app_handle.emit("timeline_event", serde_json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "kind": "eventsub",
+                "content": format!("EventSub start failed: {}", err),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }));
+        } else {
+            let _ = app_handle.emit("timeline_event", serde_json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "kind": "eventsub",
+                "content": "EventSub listener started.",
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }));
         }
     }
 
@@ -3408,6 +3569,414 @@ pub async fn get_provider_api_key(
         .secrets
         .get_provider_key(&provider_name)
         .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssemblyAiStreamingTokenView {
+    pub token: String,
+    pub expires_in_seconds: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyAiStreamingTokenResponse {
+    token: String,
+    expires_in_seconds: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyAiUploadResponse {
+    upload_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyAiTranscriptCreateResponse {
+    id: String,
+    status: String,
+    text: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssemblyAiTranscriptStatusResponse {
+    status: String,
+    text: Option<String>,
+    error: Option<String>,
+}
+
+async fn assemblyai_api_key(shared: &Arc<crate::state::SharedState>) -> Result<Option<String>, String> {
+    Ok(shared
+        .secrets
+        .get_provider_key("assemblyai")
+        .map_err(|e| e.to_string())?
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        }))
+}
+
+async fn emit_live_stt_event(app_handle: &AppHandle, payload: LiveSttEvent) {
+    let _ = app_handle.emit("live_stt_event", payload);
+}
+
+async fn stop_assemblyai_live_stt_internal() -> Result<(), String> {
+    let mut guard = ASSEMBLYAI_LIVE_SESSION.lock().await;
+    if let Some(handle) = guard.take() {
+        let _ = handle.stop_tx.send(true);
+        let _ = timeout(Duration::from_secs(3), handle.task).await;
+    }
+    Ok(())
+}
+
+async fn run_assemblyai_live_stt_session(
+    app_handle: AppHandle,
+    api_key: String,
+    mut stop_rx: watch::Receiver<bool>,
+    pause_rx: watch::Receiver<bool>,
+) -> Result<(), String> {
+    emit_live_stt_event(
+        &app_handle,
+        LiveSttEvent {
+            kind: "status".to_string(),
+            text: None,
+            detail: Some("Connecting AssemblyAI Live...".to_string()),
+            backend: None,
+        },
+    )
+    .await;
+
+    let mut request = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&encoding=pcm_s16le&speech_model=universal-streaming-english&format_turns=false&min_turn_silence=850&max_turn_silence=1800"
+        .into_client_request()
+        .map_err(|e| format!("AssemblyAI request build failed: {e}"))?;
+    request
+        .headers_mut()
+        .insert("Authorization", HeaderValue::from_str(&api_key).map_err(|e| e.to_string())?);
+    let (ws_stream, _) = connect_async(request)
+        .await
+        .map_err(|e| format!("AssemblyAI websocket connect failed: {e}"))?;
+    let (mut ws_write, mut ws_read) = ws_stream.split();
+
+    let mut capture = native_mic::spawn_pcm_stream().await.map_err(|e| e.to_string())?;
+    let backend_name = capture.backend.clone();
+    emit_live_stt_event(
+        &app_handle,
+        LiveSttEvent {
+            kind: "status".to_string(),
+            text: None,
+            detail: Some("AssemblyAI Live active.".to_string()),
+            backend: Some(backend_name.clone()),
+        },
+    )
+    .await;
+
+    let mut audio_buf = vec![0_u8; 1600];
+    let writer_pause_rx = pause_rx.clone();
+    let mut writer_stop_rx = stop_rx.clone();
+    let mut status_pause_rx = pause_rx.clone();
+    let writer = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = writer_stop_rx.changed() => {
+                    break;
+                }
+                read = capture.stdout.read(&mut audio_buf) => {
+                    let count = read.map_err(|e| format!("mic stream read failed: {e}"))?;
+                    if count == 0 {
+                        break;
+                    }
+                    if *writer_pause_rx.borrow() {
+                        continue;
+                    }
+                    ws_write.send(Message::Binary(audio_buf[..count].to_vec())).await
+                        .map_err(|e| format!("AssemblyAI audio send failed: {e}"))?;
+                }
+            }
+        }
+
+        let _ = ws_write
+            .send(Message::Text("{\"type\":\"Terminate\"}".to_string()))
+            .await;
+        let _ = timeout(Duration::from_secs(1), capture.child.kill()).await;
+        let _ = timeout(Duration::from_secs(1), capture.child.wait()).await;
+        Ok::<(), String>(())
+    });
+
+    loop {
+        tokio::select! {
+            _ = status_pause_rx.changed() => {
+                let paused = *status_pause_rx.borrow();
+                emit_live_stt_event(
+                    &app_handle,
+                    LiveSttEvent {
+                        kind: "status".to_string(),
+                        text: None,
+                        detail: Some(if paused {
+                            "AssemblyAI Live paused while bot speech is playing.".to_string()
+                        } else {
+                            "AssemblyAI Live listening.".to_string()
+                        }),
+                        backend: Some(backend_name.clone()),
+                    }
+                ).await;
+            }
+            _ = stop_rx.changed() => {
+                break;
+            }
+            message = ws_read.next() => {
+                let Some(frame) = message else { break; };
+                match frame.map_err(|e| format!("AssemblyAI websocket read failed: {e}"))? {
+                    Message::Text(text) => {
+                        let payload: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                        let kind = payload.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                        if kind == "Begin" {
+                            emit_live_stt_event(
+                                &app_handle,
+                                LiveSttEvent {
+                                    kind: "status".to_string(),
+                                    text: None,
+                                    detail: Some("AssemblyAI Live listening.".to_string()),
+                                    backend: Some(backend_name.clone()),
+                                }
+                            ).await;
+                            continue;
+                        }
+                        let transcript = payload
+                            .get("transcript")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if transcript.is_empty() {
+                            continue;
+                        }
+                        let end_of_turn = payload
+                            .get("end_of_turn")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if !should_emit_live_stt_transcript(&transcript, end_of_turn) {
+                            continue;
+                        }
+                        emit_live_stt_event(
+                            &app_handle,
+                            LiveSttEvent {
+                                kind: if end_of_turn { "final".to_string() } else { "interim".to_string() },
+                                text: Some(transcript),
+                                detail: None,
+                                backend: Some(backend_name.clone()),
+                            }
+                        ).await;
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let _ = writer.abort();
+    emit_live_stt_event(
+        &app_handle,
+        LiveSttEvent {
+            kind: "status".to_string(),
+            text: None,
+            detail: Some("AssemblyAI Live stopped.".to_string()),
+            backend: Some(backend_name),
+        },
+    )
+    .await;
+    Ok(())
+}
+
+async fn transcribe_with_assemblyai_bytes(api_key: &str, audio_bytes: Vec<u8>) -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let upload = timeout(
+        Duration::from_secs(20),
+        client
+            .post("https://api.assemblyai.com/v2/upload")
+            .header("Authorization", api_key)
+            .header("Content-Type", "application/octet-stream")
+            .body(audio_bytes)
+            .send(),
+    )
+    .await
+    .map_err(|_| "AssemblyAI upload timed out".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    if !upload.status().is_success() {
+        let status = upload.status();
+        let body = upload.text().await.unwrap_or_else(|_| "<empty>".to_string());
+        return Err(format!("AssemblyAI upload failed with {status}: {body}"));
+    }
+
+    let upload_payload: AssemblyAiUploadResponse = upload.json().await.map_err(|e| e.to_string())?;
+
+    let create = timeout(
+        Duration::from_secs(20),
+        client
+            .post("https://api.assemblyai.com/v2/transcript")
+            .header("Authorization", api_key)
+            .json(&serde_json::json!({
+                "audio_url": upload_payload.upload_url,
+                "speech_models": ["universal"],
+                "language_code": "en_us",
+                "punctuate": true,
+                "format_text": true
+            }))
+            .send(),
+    )
+    .await
+    .map_err(|_| "AssemblyAI transcript request timed out".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    if !create.status().is_success() {
+        let status = create.status();
+        let body = create.text().await.unwrap_or_else(|_| "<empty>".to_string());
+        return Err(format!("AssemblyAI transcript request failed with {status}: {body}"));
+    }
+
+    let created: AssemblyAiTranscriptCreateResponse = create.json().await.map_err(|e| e.to_string())?;
+    if created.status == "completed" {
+        return Ok(created.text.unwrap_or_default().trim().to_string());
+    }
+    if created.status == "error" {
+        return Err(created.error.unwrap_or_else(|| "AssemblyAI transcription failed.".to_string()));
+    }
+
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let poll = timeout(
+            Duration::from_secs(10),
+            client
+                .get(format!("https://api.assemblyai.com/v2/transcript/{}", created.id))
+                .header("Authorization", api_key)
+                .send(),
+        )
+        .await
+        .map_err(|_| "AssemblyAI transcript polling timed out".to_string())?
+        .map_err(|e| e.to_string())?;
+
+        if !poll.status().is_success() {
+            let status = poll.status();
+            let body = poll.text().await.unwrap_or_else(|_| "<empty>".to_string());
+            return Err(format!("AssemblyAI polling failed with {status}: {body}"));
+        }
+
+        let payload: AssemblyAiTranscriptStatusResponse = poll.json().await.map_err(|e| e.to_string())?;
+        match payload.status.as_str() {
+            "completed" => return Ok(payload.text.unwrap_or_default().trim().to_string()),
+            "error" => return Err(payload.error.unwrap_or_else(|| "AssemblyAI transcription failed.".to_string())),
+            _ => {}
+        }
+    }
+
+    Err("AssemblyAI transcription timed out while polling.".to_string())
+}
+
+#[tauri::command]
+pub async fn create_assemblyai_streaming_token(
+    state: tauri::State<'_, AppState>,
+    expires_in_seconds: Option<u32>,
+    max_session_duration_seconds: Option<u32>,
+) -> Result<AssemblyAiStreamingTokenView, String> {
+    let api_key = state
+        .0
+        .secrets
+        .get_provider_key("assemblyai")
+        .map_err(|e| e.to_string())?
+        .and_then(|value| {
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() { None } else { Some(trimmed) }
+        })
+        .ok_or_else(|| "AssemblyAI API key is not configured. Save it in Voice Diagnostics first.".to_string())?;
+
+    let expires_in_seconds = expires_in_seconds.unwrap_or(60).clamp(1, 600);
+    let max_session_duration_seconds = max_session_duration_seconds.unwrap_or(3600).clamp(60, 10800);
+    let url = format!(
+        "https://streaming.assemblyai.com/v3/token?expires_in_seconds={expires_in_seconds}&max_session_duration_seconds={max_session_duration_seconds}"
+    );
+
+    let client = reqwest::Client::new();
+    let response = timeout(
+        Duration::from_secs(15),
+        client
+            .get(url)
+            .header("Authorization", api_key)
+            .send(),
+    )
+    .await
+    .map_err(|_| "AssemblyAI token request timed out".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| "<empty>".to_string());
+        return Err(format!("AssemblyAI token request failed with {status}: {body}"));
+    }
+
+    let payload: AssemblyAiStreamingTokenResponse = response.json().await.map_err(|e| e.to_string())?;
+    Ok(AssemblyAiStreamingTokenView {
+        token: payload.token,
+        expires_in_seconds: payload.expires_in_seconds,
+    })
+}
+
+#[tauri::command]
+pub async fn start_assemblyai_live_stt(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let api_key = assemblyai_api_key(&state.0)
+        .await?
+        .ok_or_else(|| "AssemblyAI API key is not configured. Save it in Speech setup first.".to_string())?;
+
+    stop_assemblyai_live_stt_internal().await?;
+
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let (pause_tx, pause_rx) = watch::channel(false);
+    let app_handle_clone = app_handle.clone();
+    let task = tokio::spawn(async move {
+        if let Err(err) = run_assemblyai_live_stt_session(app_handle_clone.clone(), api_key, stop_rx, pause_rx).await {
+            emit_live_stt_event(
+                &app_handle_clone,
+                LiveSttEvent {
+                    kind: "error".to_string(),
+                    text: None,
+                    detail: Some(err.clone()),
+                    backend: None,
+                },
+            )
+            .await;
+            let _ = app_handle_clone.emit("timeline_event", serde_json::json!({
+                "id": uuid::Uuid::new_v4().to_string(),
+                "kind": "mic_error",
+                "content": format!("Mic error: {err}"),
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }));
+        }
+    });
+
+    let mut guard = ASSEMBLYAI_LIVE_SESSION.lock().await;
+    *guard = Some(AssemblyAiLiveSessionHandle {
+        stop_tx,
+        pause_tx,
+        task,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_assemblyai_live_stt() -> Result<(), String> {
+    stop_assemblyai_live_stt_internal().await
+}
+
+#[tauri::command]
+pub async fn set_assemblyai_live_stt_paused(paused: bool) -> Result<(), String> {
+    let guard = ASSEMBLYAI_LIVE_SESSION.lock().await;
+    if let Some(handle) = guard.as_ref() {
+        let _ = handle.pause_tx.send(paused);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -3989,6 +4558,7 @@ pub async fn get_character_studio_settings(
         edge: studio.edge,
         energy: studio.energy,
         story: studio.story,
+        profanity_allowed: studio.profanity_allowed,
         extra_direction: studio.extra_direction,
     })
 }
@@ -4006,6 +4576,7 @@ pub async fn set_character_studio_settings(
     cfg.character_studio.edge = input.edge.clamp(0, 100);
     cfg.character_studio.energy = input.energy.clamp(0, 100);
     cfg.character_studio.story = input.story.clamp(0, 100);
+    cfg.character_studio.profanity_allowed = input.profanity_allowed;
     cfg.character_studio.extra_direction = input.extra_direction.trim().to_string();
     map_err(cfg.save_to_disk())
 }
@@ -4138,6 +4709,13 @@ pub async fn transcribe_local_audio(
     base64_audio: String,
     mime_type: String,
 ) -> Result<String, String> {
+    if let Some(api_key) = assemblyai_api_key(&state.0).await? {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(base64_audio.as_bytes())
+            .map_err(|e| format!("invalid base64 audio payload: {e}"))?;
+        let _permit = acquire_stt_permit(&state.0).await?;
+        return transcribe_with_assemblyai_bytes(&api_key, bytes).await;
+    }
     let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     let _permit = acquire_stt_permit(&state.0).await?;
     map_err(stt::transcribe_base64_audio(&cfg, &base64_audio, &mime_type).await)
@@ -4148,9 +4726,31 @@ pub async fn transcribe_mic_chunk(
     app_handle: AppHandle,
     state: tauri::State<'_, AppState>,
     duration_ms: u64,
+    prefer_local: Option<bool>,
 ) -> Result<String, String> {
-    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     let audio_b64 = map_err(native_mic::capture_wav_base64(duration_ms).await)?;
+    if !prefer_local.unwrap_or(false) {
+        if let Some(api_key) = assemblyai_api_key(&state.0).await? {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(audio_b64.as_bytes())
+                .map_err(|e| format!("invalid base64 mic payload: {e}"))?;
+            let _permit = acquire_stt_permit(&state.0).await?;
+            return transcribe_with_assemblyai_bytes(&api_key, bytes).await;
+        }
+    }
+    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
+    let _permit = acquire_stt_permit(&state.0).await?;
+    map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)
+}
+
+#[tauri::command]
+pub async fn transcribe_mic_chunk_local(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+    duration_ms: u64,
+) -> Result<String, String> {
+    let audio_b64 = map_err(native_mic::capture_wav_base64(duration_ms).await)?;
+    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     let _permit = acquire_stt_permit(&state.0).await?;
     map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)
 }
@@ -4161,10 +4761,17 @@ pub async fn capture_mic_debug(
     state: tauri::State<'_, AppState>,
     duration_ms: u64,
 ) -> Result<MicDebugView, String> {
-    let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
     let (audio_b64, debug) = map_err(native_mic::capture_wav_base64_with_debug(duration_ms).await)?;
     let _permit = acquire_stt_permit(&state.0).await?;
-    let transcript = map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)?;
+    let transcript = if let Some(api_key) = assemblyai_api_key(&state.0).await? {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(audio_b64.as_bytes())
+            .map_err(|e| format!("invalid base64 mic payload: {e}"))?;
+        transcribe_with_assemblyai_bytes(&api_key, bytes).await?
+    } else {
+        let cfg = resolve_or_repair_stt_config(&app_handle, &state.0).await?;
+        map_err(stt::transcribe_base64_audio(&cfg, &audio_b64, "audio/wav").await)?
+    };
     Ok(MicDebugView {
         backend: debug.backend,
         wav_path: debug.wav_path,
@@ -4249,19 +4856,12 @@ async fn submit_voice_session_prompt_internal(
     if trimmed.is_empty() {
         return Ok(());
     }
-    let configured = shared
-        .config
-        .read()
-        .twitch
-        .broadcaster_login
-        .clone()
-        .unwrap_or_else(|| "streamer".to_string());
     let user = caller_name
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .unwrap_or(&configured)
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| "You".to_string());
     let chat = ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         user,

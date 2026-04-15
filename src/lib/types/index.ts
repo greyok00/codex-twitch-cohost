@@ -165,6 +165,8 @@ export interface BehaviorSettings {
   minimumReplyIntervalMs?: number | null;
   postBotMessagesToTwitch?: boolean;
   topicContinuationMode?: boolean;
+  replyLengthMode?: 'short' | 'natural' | 'long';
+  allowBriefReactions?: boolean;
 }
 
 export interface SceneSettings {
@@ -182,6 +184,7 @@ export interface CharacterStudioSettings {
   edge: number;
   energy: number;
   story: number;
+  profanityAllowed: boolean;
   extraDirection: string;
 }
 
@@ -194,7 +197,7 @@ export interface PublicCallSettings {
 export interface VoiceSessionDiagnostics {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'local-fallback' | 'none';
+  engine: 'assemblyai-realtime' | 'local-fallback' | 'none';
   status: 'idle' | 'starting' | 'listening' | 'processing' | 'replying' | 'error';
   interimText: string;
   lastFinalText: string;
@@ -210,7 +213,7 @@ export interface VoiceSessionDiagnostics {
 export interface VoiceInputFrame {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'local-fallback' | 'none';
+  engine: 'assemblyai-realtime' | 'local-fallback' | 'none';
   transcript: string;
   normalizedTranscript: string;
   commandHint?: string | null;

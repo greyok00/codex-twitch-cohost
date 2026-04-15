@@ -98,6 +98,7 @@ pub struct SharedState {
     pub search_gate: Arc<Semaphore>,
     pub summarize_gate: Arc<Semaphore>,
     pub browser_gate: Arc<Semaphore>,
+    pub local_turn_cooldown_until: RwLock<Option<Instant>>,
 }
 
 impl SharedState {

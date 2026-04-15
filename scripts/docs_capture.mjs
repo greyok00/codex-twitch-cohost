@@ -10,18 +10,18 @@ const candidateUrls = process.env.DOCS_CAPTURE_URL
       'http://127.0.0.1:5173/'
     ];
 const screenshotsDir = path.resolve('docs/screenshots');
-const heroScreenshot = path.join(screenshotsDir, 'hero-command-center.png');
+const heroScreenshot = path.join(screenshotsDir, 'hero-grey-ui.png');
 
 async function ensureDirs() {
   await fs.mkdir(screenshotsDir, { recursive: true });
 }
 
 async function stableScreenshot(page) {
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(2200);
   await page.evaluate(() => {
-    for (const node of document.querySelectorAll('.banner-error')) {
-      node.remove();
-    }
+    for (const node of document.querySelectorAll('.banner-error')) node.remove();
+    const startup = document.querySelector('.startup-overlay');
+    if (startup) startup.remove();
   });
   await page.screenshot({
     path: heroScreenshot,
@@ -35,9 +35,7 @@ async function openFirstReachable(page) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
       return;
     } catch (err) {
-      if (url === candidateUrls[candidateUrls.length - 1]) {
-        throw err;
-      }
+      if (url === candidateUrls[candidateUrls.length - 1]) throw err;
     }
   }
 }
@@ -48,14 +46,15 @@ async function run() {
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    viewport: { width: 1600, height: 1100 },
+    viewport: { width: 1680, height: 1180 },
     deviceScaleFactor: 1
   });
   const page = await context.newPage();
-  page.setDefaultTimeout(15000);
+  page.setDefaultTimeout(20000);
 
   await openFirstReachable(page);
-  await page.getByText('GreyOK Command Center').waitFor({ state: 'visible' });
+  await page.getByText('STT Tracking').waitFor({ state: 'visible' });
+  await page.getByText('Chat').first().waitFor({ state: 'visible' });
   await stableScreenshot(page);
 
   await context.close();

@@ -117,6 +117,10 @@ pub struct BehaviorConfig {
     pub post_bot_messages_to_twitch: bool,
     #[serde(default)]
     pub topic_continuation_mode: bool,
+    #[serde(default = "default_reply_length_mode")]
+    pub reply_length_mode: String,
+    #[serde(default = "default_allow_brief_reactions")]
+    pub allow_brief_reactions: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +140,8 @@ pub struct CharacterStudioConfig {
     pub edge: u8,
     pub energy: u8,
     pub story: u8,
+    #[serde(default)]
+    pub profanity_allowed: bool,
     pub extra_direction: String,
 }
 
@@ -178,6 +184,14 @@ pub struct PublicCallConfig {
 
 fn default_post_bot_messages_to_twitch() -> bool {
     false
+}
+
+fn default_reply_length_mode() -> String {
+    "natural".to_string()
+}
+
+fn default_allow_brief_reactions() -> bool {
+    true
 }
 
 fn default_public_call_token() -> String {
@@ -225,7 +239,7 @@ impl Default for AppConfig {
             personality: PersonalityProfile::default(),
             voice: VoiceConfig {
                 enabled: true,
-                voice_name: Some("en-US-GuyNeural".to_string()),
+                voice_name: Some("en-US-EmmaNeural".to_string()),
                 volume_percent: Some(100),
                 piper_binary_path: None,
                 piper_model_path: None,
@@ -263,6 +277,8 @@ impl Default for AppConfig {
                 scheduled_messages_minutes: None,
                 post_bot_messages_to_twitch: false,
                 topic_continuation_mode: false,
+                reply_length_mode: default_reply_length_mode(),
+                allow_brief_reactions: default_allow_brief_reactions(),
             },
             scene: SceneConfig::default(),
             character_studio: CharacterStudioConfig::default(),
@@ -297,6 +313,7 @@ impl Default for CharacterStudioConfig {
             edge: 15,
             energy: 60,
             story: 40,
+            profanity_allowed: false,
             extra_direction: String::new(),
         }
     }

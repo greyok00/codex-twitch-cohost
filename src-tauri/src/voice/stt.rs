@@ -94,14 +94,16 @@ async fn convert_to_wav(input_path: &PathBuf, wav_path: &PathBuf) -> AppResult<(
 }
 
 fn detect_vosk_python() -> Option<String> {
-    let candidates = [
-        "./.venv-vosk/bin/python",
-        "../.venv-vosk/bin/python",
-        "python3",
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = vec![
+        manifest_dir.join("../.venv-vosk/bin/python").to_string_lossy().to_string(),
+        "./.venv-vosk/bin/python".to_string(),
+        "../.venv-vosk/bin/python".to_string(),
+        "python3".to_string(),
     ];
     for candidate in candidates {
         if candidate == "python3" {
-            return Some(candidate.to_string());
+            return Some(candidate);
         }
         let path = PathBuf::from(candidate);
         if path.exists() {
@@ -112,9 +114,11 @@ fn detect_vosk_python() -> Option<String> {
 }
 
 fn detect_vosk_script() -> Option<String> {
-    let candidates = [
-        "./scripts/vosk_transcribe.py",
-        "../scripts/vosk_transcribe.py",
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = vec![
+        manifest_dir.join("../scripts/vosk_transcribe.py").to_string_lossy().to_string(),
+        "./scripts/vosk_transcribe.py".to_string(),
+        "../scripts/vosk_transcribe.py".to_string(),
     ];
     for candidate in candidates {
         let path = PathBuf::from(candidate);
@@ -150,9 +154,9 @@ async fn run_vosk(model_dir: &str, input_path: &PathBuf) -> AppResult<String> {
         .arg(model_path)
         .arg("--audio")
         .arg(&wav_path);
-    let output = timeout(Duration::from_secs(20), cmd.output())
+    let output = timeout(Duration::from_secs(45), cmd.output())
         .await
-        .map_err(|_| AppError::Voice("Vosk STT timed out after 20s".to_string()))?
+        .map_err(|_| AppError::Voice("Vosk STT timed out after 45s".to_string()))?
         .map_err(|e| AppError::Voice(format!("failed launching Vosk STT helper: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

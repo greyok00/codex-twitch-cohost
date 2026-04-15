@@ -10,6 +10,7 @@ describe('voice tone profile builder', () => {
     expect(profile.voice).toBe('Guy');
     expect(profile.master_prompt_override).toContain('Voice: Guy.');
     expect(profile.master_prompt_override).toContain('Warmth 55/100');
+    expect(profile.master_prompt_override).toContain('Avoid profanity in normal replies.');
     expect(profile.reply_rules).toContain('Stay on the latest topic');
   });
 
@@ -23,5 +24,16 @@ describe('voice tone profile builder', () => {
     expect(profile.tone).toContain('sharp');
     expect(profile.chat_behavior_rules.some((rule) => rule.includes('uncensored'))).toBe(true);
     expect(profile.master_prompt_override).toContain('Extra direction: Keep the jokes mean but still topical.');
+  });
+
+  it('allows profanity when explicitly enabled', () => {
+    const preset = findVoicePresetById('roger');
+    const profile = composeDirectProfile(
+      { ...defaultToneStudioSettings, profanityAllowed: true },
+      preset.defaultVoice
+    );
+
+    expect(profile.master_prompt_override).toContain('Profanity is allowed when it improves the line naturally.');
+    expect(profile.chat_behavior_rules.some((rule) => rule.includes('Profanity is allowed'))).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import type { VoiceSessionDiagnostics } from '../types';
 
 export type VoiceSessionMode = 'owner' | 'public';
-export type VoiceEngineKind = 'local-fallback' | 'none';
+export type VoiceEngineKind = 'assemblyai-realtime' | 'local-fallback' | 'none';
 export type VoiceSessionStatus = 'idle' | 'starting' | 'listening' | 'processing' | 'replying' | 'error';
 
 export interface VoiceSessionState extends VoiceSessionDiagnostics {

@@ -307,8 +307,12 @@ export async function transcribeLocalAudio(base64Audio: string, mimeType: string
   return invoke<string>('transcribe_local_audio', { base64Audio, mimeType });
 }
 
-export async function transcribeMicChunk(durationMs: number): Promise<string> {
-  return invoke<string>('transcribe_mic_chunk', { durationMs });
+export async function transcribeMicChunk(durationMs: number, preferLocal = false): Promise<string> {
+  return invoke<string>('transcribe_mic_chunk', { durationMs, preferLocal });
+}
+
+export async function transcribeMicChunkLocal(durationMs: number): Promise<string> {
+  return invoke<string>('transcribe_mic_chunk_local', { durationMs });
 }
 
 export async function captureMicDebug(durationMs: number): Promise<MicDebugView> {

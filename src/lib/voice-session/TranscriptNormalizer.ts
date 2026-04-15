@@ -1,13 +1,23 @@
-import { isAmbientNoiseTranscript, isNonSpeechCaption, mergeTranscriptText, normalizeSpeechText } from '../voice/utterance';
+import {
+  chooseBestUtterance,
+  isAmbientNoiseTranscript,
+  isNonSpeechCaption,
+  mergeTranscriptText,
+  normalizeSpeechText,
+  recordUtteranceCandidate,
+  type UtteranceCandidate
+} from '../voice/utterance';
 
 export class TranscriptNormalizer {
   private interim = '';
   private finalized = '';
   private lastCommitted = '';
+  private candidates: UtteranceCandidate[] = [];
 
   reset() {
     this.interim = '';
     this.finalized = '';
+    this.candidates = [];
   }
 
   getInterim() {
@@ -20,6 +30,7 @@ export class TranscriptNormalizer {
       return '';
     }
     this.interim = mergeTranscriptText(this.finalized, text).trim();
+    this.candidates = recordUtteranceCandidate(this.candidates, this.interim);
     return this.interim;
   }
 
@@ -27,23 +38,38 @@ export class TranscriptNormalizer {
     const clean = text.trim();
     if (!clean || isNonSpeechCaption(clean) || isAmbientNoiseTranscript(clean)) {
       this.interim = '';
+      this.candidates = [];
       return null;
     }
-    const merged = mergeTranscriptText(this.finalized, clean).trim();
-    const normalized = normalizeSpeechText(merged);
+    const priorInterim = this.interim.trim();
+    const merged = mergeTranscriptText(priorInterim || this.finalized, clean).trim();
+    this.candidates = recordUtteranceCandidate(this.candidates, merged);
+    const selected = chooseBestUtterance(merged, this.candidates).trim();
+    const normalizedInterim = normalizeSpeechText(priorInterim);
+    const normalizedSelected = normalizeSpeechText(selected);
+    const normalizedFinal = normalizeSpeechText(clean);
+    const committedText = shouldPreferInterim(priorInterim, clean)
+      ? priorInterim
+      : (normalizedInterim && normalizedSelected && normalizedInterim.includes(normalizedSelected)
+        ? priorInterim
+        : selected);
+    const normalized = normalizeSpeechText(committedText);
     if (!normalized) {
       this.interim = '';
+      this.candidates = [];
       return null;
     }
     if (normalized === normalizeSpeechText(this.lastCommitted)) {
       this.interim = '';
       this.finalized = '';
+      this.candidates = [];
       return null;
     }
-    this.lastCommitted = merged;
+    this.lastCommitted = committedText;
     this.finalized = '';
     this.interim = '';
-    return merged;
+    this.candidates = [];
+    return committedText;
   }
 
   pushFallbackChunk(text: string): string | null {
@@ -56,4 +82,16 @@ export class TranscriptNormalizer {
     this.lastCommitted = clean;
     return clean;
   }
+}
+
+function shouldPreferInterim(interim: string, finalText: string): boolean {
+  const interimNorm = normalizeSpeechText(interim);
+  const finalNorm = normalizeSpeechText(finalText);
+  if (!interimNorm || !finalNorm) return false;
+  if (interimNorm === finalNorm) return false;
+  const interimWords = interimNorm.split(' ').filter(Boolean);
+  const finalWords = finalNorm.split(' ').filter(Boolean);
+  if (interimWords.length < 3 || finalWords.length === 0) return false;
+  const overlap = finalWords.filter((word) => interimWords.includes(word)).length;
+  return finalWords.length < interimWords.length && overlap <= 1;
 }

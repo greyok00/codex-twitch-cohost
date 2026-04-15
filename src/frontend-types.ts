@@ -46,6 +46,8 @@ export interface BehaviorSettings {
   minimumReplyIntervalMs?: number | null;
   postBotMessagesToTwitch?: boolean;
   topicContinuationMode?: boolean;
+  replyLengthMode?: 'short' | 'natural' | 'long';
+  allowBriefReactions?: boolean;
 }
 
 export interface CharacterStudioSettings {
@@ -56,6 +58,7 @@ export interface CharacterStudioSettings {
   edge: number;
   energy: number;
   story: number;
+  profanityAllowed: boolean;
   extraDirection: string;
 }
 
@@ -117,7 +120,7 @@ export interface TtsVoiceSettings {
 export interface VoiceInputFrame {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'local-fallback' | 'none';
+  engine: 'assemblyai-realtime' | 'local-fallback' | 'none';
   transcript: string;
   normalizedTranscript: string;
   commandHint?: string | null;
@@ -140,12 +143,25 @@ export interface VoiceRuntimeReport {
   checks: VoiceRuntimeCheck[];
 }
 
+export interface MicDebugView {
+  backend: string;
+  wavPath: string;
+  transcript: string;
+  durationMs: number;
+}
+
 export interface SttAutoConfigResult {
   applied: boolean;
   message: string;
   sttEnabled: boolean;
   sttBinaryPath?: string | null;
   sttModelPath?: string | null;
+}
+
+export interface SttSetupProgress {
+  stage: string;
+  progress: number;
+  message: string;
 }
 
 export interface HeadlessStatusView {
@@ -184,7 +200,7 @@ export interface BackendConsoleResult {
 
 export interface VoiceSessionState {
   sessionId: string;
-  engine: 'local-fallback' | 'none';
+  engine: 'assemblyai-realtime' | 'local-fallback' | 'none';
   status: 'idle' | 'starting' | 'listening' | 'processing' | 'replying' | 'error';
   interimText: string;
   lastFinalText: string;
@@ -197,4 +213,16 @@ export interface VoiceSessionState {
   lastError: string | null;
   speakingBlocked: boolean;
   micEnabled: boolean;
+}
+
+export interface AssemblyAiStreamingToken {
+  token: string;
+  expiresInSeconds: number;
+}
+
+export interface LiveSttEvent {
+  kind: 'status' | 'interim' | 'final' | 'error' | string;
+  text?: string | null;
+  detail?: string | null;
+  backend?: string | null;
 }

@@ -12,7 +12,7 @@ const GlassInput = React.forwardRef<HTMLInputElement, GlassInputProps>(
     return (
       <div className="relative group">
         {glowOnFocus && (
-          <div className="absolute -inset-0.5 rounded-xl bg-linear-to-r from-cyan-500/0 via-blue-500/0 to-purple-500/0 blur-md opacity-0 transition-all duration-300 group-focus-within:from-cyan-500/30 group-focus-within:via-blue-500/30 group-focus-within:to-purple-500/30 group-focus-within:opacity-70" />
+          <div className="absolute -inset-0.5 rounded-xl bg-linear-to-r from-white/0 via-white/0 to-white/0 blur-md opacity-0 transition-all duration-300 group-focus-within:from-white/10 group-focus-within:via-white/8 group-focus-within:to-white/10 group-focus-within:opacity-70" />
         )}
         <input
           type={type}

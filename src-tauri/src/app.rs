@@ -1,6 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     fs,
+    hash::{Hash, Hasher},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -11,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use rand::seq::SliceRandom;
+use std::collections::hash_map::DefaultHasher;
 
 use crate::{
     config::ProviderConfig,
@@ -156,6 +158,7 @@ pub fn bootstrap(app: AppHandle) -> Result<AppState, String> {
         search_gate: Arc::new(tokio::sync::Semaphore::new(2)),
         summarize_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         browser_gate: Arc::new(tokio::sync::Semaphore::new(2)),
+        local_turn_cooldown_until: RwLock::new(None),
     });
 
     let app_state = AppState(state.clone());
@@ -358,12 +361,62 @@ fn has_recent_memory_fact(state: &SharedState, kind: &str, content: &str) -> boo
         .any(|rec| normalize_for_dedupe(&rec.content) == target)
 }
 
+fn memory_bank_label_for_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "profile_fact" | "address_preference" | "role_label" | "relationship_state" | "preference" | "goal" => Some("streamer_profile"),
+        "setup_fact" | "correction" => Some("setup_notes"),
+        "explicit_memory" | "priority_fact" => Some("priority_notes"),
+        "bot_preference" => Some("bot_identity"),
+        _ => None,
+    }
+}
+
+fn upsert_memory_bank_line(state: &SharedState, label: &str, content: &str, max_lines: usize) {
+    let clean = clean_fact_fragment(content);
+    if clean.is_empty() {
+        return;
+    }
+    let existing = state
+        .memory
+        .list_pinned()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|item| item.label.eq_ignore_ascii_case(label))
+        .map(|item| item.content)
+        .unwrap_or_default();
+
+    let normalized_clean = normalize_for_dedupe(&clean);
+    let mut lines = existing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    if lines
+        .iter()
+        .any(|line| normalize_for_dedupe(line) == normalized_clean)
+    {
+        return;
+    }
+
+    lines.push(clean);
+    if lines.len() > max_lines {
+        lines = lines.split_off(lines.len().saturating_sub(max_lines));
+    }
+    let merged = lines.join("\n");
+    let _ = state.memory.upsert_pinned(label, &merged);
+}
+
 fn append_memory_fact(state: &SharedState, kind: &str, user: &str, content: String) {
     let clean = content.trim();
     if clean.is_empty() || has_recent_memory_fact(state, kind, clean) {
         return;
     }
     let _ = state.memory.append(kind, Some(user), clean);
+    if let Some(label) = memory_bank_label_for_kind(kind) {
+        upsert_memory_bank_line(state, label, clean, 12);
+    }
 }
 
 fn same_user(a: &str, b: &str) -> bool {
@@ -505,9 +558,12 @@ fn build_memory_context(state: &SharedState, max_items: usize) -> Vec<String> {
     let mut priority = Vec::new();
     let mut recent = Vec::new();
     for m in records {
+        if matches!(m.kind.as_str(), "bot_reply" | "story_state") {
+            continue;
+        }
         let line = render_memory_record(&m);
         match m.kind.as_str() {
-            "story_state" | "relationship_state" | "role_label" | "address_preference" | "explicit_memory" | "profile_fact" | "preference" | "goal" | "setup_fact" | "correction" | "priority_fact" | "bot_preference" => priority.push(line),
+            "relationship_state" | "role_label" | "address_preference" | "explicit_memory" | "profile_fact" | "preference" | "goal" | "setup_fact" | "correction" | "priority_fact" | "bot_preference" => priority.push(line),
             _ => recent.push(line),
         }
     }
@@ -533,6 +589,9 @@ fn build_user_memory_context(state: &SharedState, user: &str, max_items: usize) 
             continue;
         };
         if !same_user(owner, user) {
+            continue;
+        }
+        if matches!(m.kind.as_str(), "bot_reply" | "story_state") {
             continue;
         }
         let line = render_memory_record(&m);
@@ -675,6 +734,168 @@ fn looks_like_story_request(input: &str) -> bool {
     ]
     .iter()
     .any(|needle| lowered.contains(needle))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ConversationAction {
+    Repair,
+    BriefReaction,
+    DirectShort,
+    DirectMedium,
+    ContinueThread,
+}
+
+fn normalized_word_count(input: &str) -> usize {
+    input
+        .split_whitespace()
+        .filter(|token| token.chars().any(|ch| ch.is_ascii_alphanumeric()))
+        .count()
+}
+
+fn stable_reply_bucket(user: &str, content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    user.to_lowercase().hash(&mut hasher);
+    content.to_lowercase().hash(&mut hasher);
+    hasher.finish() % 100
+}
+
+fn looks_like_unclear_turn(input: &str) -> bool {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_lowercase();
+    let words = normalized_word_count(trimmed);
+    if words <= 1 && trimmed.len() < 16 {
+        return true;
+    }
+    if words <= 3
+        && !trimmed.ends_with('?')
+        && (
+            lower.contains("what")
+            || lower.contains("huh")
+            || lower.contains("wait")
+            || lower.contains("hello")
+            || lower.contains("can you")
+            || lower.contains("hear me")
+        )
+    {
+        return true;
+    }
+    false
+}
+
+fn choose_conversation_action(
+    chat: &ChatMessage,
+    send_to_twitch: bool,
+    story_mode: bool,
+    keep_talking_mode: bool,
+    allow_brief_reactions: bool,
+    reply_length_mode: &str,
+) -> ConversationAction {
+    if story_mode {
+        return ConversationAction::ContinueThread;
+    }
+    if !send_to_twitch && looks_like_unclear_turn(&chat.content) {
+        return ConversationAction::Repair;
+    }
+
+    let bucket = stable_reply_bucket(&chat.user, &chat.content);
+    let words = normalized_word_count(&chat.content);
+    let is_question = chat.content.trim().ends_with('?');
+
+    if allow_brief_reactions && !is_question && !keep_talking_mode {
+        let threshold = match reply_length_mode {
+            "short" => 30,
+            "long" => 10,
+            _ => 18,
+        };
+        if words <= 8 && bucket < threshold {
+            return ConversationAction::BriefReaction;
+        }
+    }
+
+    if keep_talking_mode || is_question || words >= 14 {
+        return ConversationAction::DirectMedium;
+    }
+
+    match reply_length_mode {
+        "short" => {
+            if bucket < 80 {
+                ConversationAction::DirectShort
+            } else {
+                ConversationAction::DirectMedium
+            }
+        }
+        "long" => {
+            if bucket < 15 {
+                ConversationAction::BriefReaction
+            } else {
+                ConversationAction::DirectMedium
+            }
+        }
+        _ => {
+            if bucket < 20 {
+                ConversationAction::BriefReaction
+            } else if bucket < 75 {
+                ConversationAction::DirectShort
+            } else {
+                ConversationAction::DirectMedium
+            }
+        }
+    }
+}
+
+fn action_instruction(action: ConversationAction) -> &'static str {
+    match action {
+        ConversationAction::Repair => "The input seems partial or unclear. Do a natural repair move only. Under 10 words. Examples in spirit: 'wait, say that again', 'I only caught half of that', 'you cut out'. No full answer.",
+        ConversationAction::BriefReaction => "Give a quick natural acknowledgment only. 2 to 10 words, or one very short sentence. Examples in spirit: 'yeah, I see what you're saying', 'right, that tracks', 'fair enough', 'okay wait', 'no, exactly'. No follow-up question unless absolutely necessary.",
+        ConversationAction::DirectShort => "Give one short direct sentence. Usually 6 to 18 words. Start with the real point, not filler.",
+        ConversationAction::DirectMedium => "Give two short conversational sentences. Usually 14 to 32 words total. First answer the point, then add one grounded reaction or joke.",
+        ConversationAction::ContinueThread => "Continue the active thread naturally. Usually 2 to 4 short sentences with continuity and concrete detail.",
+    }
+}
+
+fn clamp_reply_shape(text: &str, action: ConversationAction) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut sentences = trimmed
+        .split_terminator(['.', '!', '?'])
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if sentences.is_empty() {
+        sentences.push(trimmed);
+    }
+    match action {
+        ConversationAction::Repair => sentences[0]
+            .split_whitespace()
+            .take(10)
+            .collect::<Vec<_>>()
+            .join(" "),
+        ConversationAction::BriefReaction => sentences[0]
+            .split_whitespace()
+            .take(10)
+            .collect::<Vec<_>>()
+            .join(" "),
+        ConversationAction::DirectShort => sentences[0]
+            .split_whitespace()
+            .take(18)
+            .collect::<Vec<_>>()
+            .join(" "),
+        ConversationAction::DirectMedium => sentences
+            .into_iter()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(". "),
+        ConversationAction::ContinueThread => sentences
+            .into_iter()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(". "),
+    }
 }
 
 fn normalize_repetitive_question_reply(text: &str, story_mode: bool, latest_input: &str) -> String {
@@ -898,7 +1119,7 @@ async fn process_chat_input(
     chat: ChatMessage,
     send_to_twitch: bool,
 ) {
-    let outbound_to_twitch = send_to_twitch || state.twitch.is_connected();
+    let outbound_to_twitch = send_to_twitch || state.config.read().behavior.post_bot_messages_to_twitch;
     if should_ignore_message(state, &chat) {
         return;
     }
@@ -968,6 +1189,13 @@ async fn process_chat_input(
             }
         }
     }
+    if !send_to_twitch {
+        if let Some(until) = *state.local_turn_cooldown_until.read() {
+            if Instant::now() < until {
+                return;
+            }
+        }
+    }
 
     let config = state.config.read().clone();
     let profile = state.personality.read().clone();
@@ -1008,38 +1236,58 @@ async fn process_chat_input(
 
     let story_mode = looks_like_story_request(&chat.content);
     let keep_talking_mode = config.behavior.topic_continuation_mode;
+    let reply_length_mode = config.behavior.reply_length_mode.trim().to_lowercase();
+    let allow_brief_reactions = config.behavior.allow_brief_reactions;
+    let conversation_action = choose_conversation_action(
+        &chat,
+        send_to_twitch,
+        story_mode,
+        keep_talking_mode,
+        allow_brief_reactions,
+        &reply_length_mode,
+    );
+    let reply_size_instruction = match reply_length_mode.as_str() {
+        "short" => "Keep the reply tight: 1 short sentence, usually under 16 words.",
+        "long" => "Allow a fuller reply when useful: usually 2 to 4 sentences, but still stay focused and natural.",
+        _ => "Vary the reply size like a real person: sometimes a quick reaction, sometimes 1 short sentence, sometimes 2 or 3 short sentences if the moment needs it.",
+    };
+    let brief_reaction_instruction = if allow_brief_reactions {
+        "Brief human reactions are allowed when they fit naturally, like 'hmm', 'ugh', 'yeah', 'no shot', or 'wait'."
+    } else {
+        "Do not rely on filler reactions or one-word interjections unless the user explicitly invites them."
+    };
     let user_prompt = if send_to_twitch {
         if story_mode {
             format!(
-                "Viewer {} said: {}\nThis is a story or scene request. Continue it with concrete details and a strong voice. Use statements, not a list of questions. Keep it concise enough for chat, around 2 to 4 sentences, but still advance the scene.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
-                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+                "Viewer {} said: {}\nThis is a story or scene request. Continue it with concrete details and a strong voice. Use statements, not a list of questions. Keep it concise enough for chat, around 2 to 4 sentences, but still advance the scene.\n{}\n{}\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
+                chat.user, chat.content, reply_size_instruction, brief_reaction_instruction, speaker_memory.join("\n"), recent_story.join("\n")
             )
         } else if keep_talking_mode {
             format!(
-                "Viewer {} said: {}\nKeep talking about the current subject. Stay on topic, make statements, develop the idea, and avoid question loops. Use recent memory and scene context if relevant. Reply in 2 or 3 short sentences and do not end with more than one brief question.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
-                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+                "Viewer {} said: {}\nKeep talking about the current subject. Stay on topic, make statements, develop the idea, and avoid question loops. Use recent memory if relevant, but do not invent scene continuations or reuse old bot wording. {}\n{}\n{}\nDo not end with more than one brief question.\nCurrent speaker memory:\n{}",
+                chat.user, chat.content, reply_size_instruction, brief_reaction_instruction, action_instruction(conversation_action), speaker_memory.join("\n")
             )
         } else {
             format!(
-                "Viewer {} said: {}\nAnswer the actual point of that line first. Make at least one grounded statement or observation before asking anything. Reference one concrete detail from it. If the line appears garbled, incomplete, or low-confidence, return no reply instead of guessing. Keep it under 28 words and stay on topic.\nCurrent speaker memory:\n{}",
-                chat.user, chat.content, speaker_memory.join("\n")
+                "Viewer {} said: {}\nAnswer the actual point of that line first. Make at least one grounded statement or observation before asking anything. Reference one concrete detail from it. If the line appears garbled, incomplete, or low-confidence, do a short repair move instead of guessing. {}\n{}\n{}\nStay on topic.\nCurrent speaker memory:\n{}",
+                chat.user, chat.content, reply_size_instruction, brief_reaction_instruction, action_instruction(conversation_action), speaker_memory.join("\n")
             )
         }
     } else {
         if story_mode {
             format!(
-                "Streamer {} said: {}\nThis is a live local cohost exchange and the user wants an ongoing story, romance, or scene. Continue the scene instead of interrogating them. Use concrete sensory details, emotional continuity, and established context from recent chat and memory. Prefer statements over questions. Write 1 short paragraph or 3 to 6 sentences, and only ask a question if the user clearly invited choice or direction.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
-                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+                "Streamer {} said: {}\nThis is a live local cohost exchange and the user wants an ongoing story, romance, or scene. Continue the scene instead of interrogating them. Use concrete sensory details, emotional continuity, and established context from recent chat and memory. Prefer statements over questions. Write 1 short paragraph or 3 to 6 sentences, and only ask a question if the user clearly invited choice or direction.\n{}\n{}\n{}\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
+                chat.user, chat.content, reply_size_instruction, brief_reaction_instruction, action_instruction(conversation_action), speaker_memory.join("\n"), recent_story.join("\n")
             )
         } else if keep_talking_mode {
             format!(
-                "Streamer {} said: {}\nKeep talking about the same subject instead of resetting into another question. Develop the current topic with concrete observations, memory, and continuity. Prefer statements, reactions, and continuation over asking for clarification. Reply in 2 or 3 conversational sentences and only ask a question if absolutely necessary.\nCurrent speaker memory:\n{}\nRecent scene context:\n{}",
-                chat.user, chat.content, speaker_memory.join("\n"), recent_story.join("\n")
+                "Streamer {} said: {}\nKeep talking about the same subject instead of resetting into another question. Develop the current topic with concrete observations and recent memory, but do not invent scene continuations, haunted metaphors, or reuse old bot wording. Prefer statements and direct answers over asking for clarification. {}\n{}\n{}\nOnly ask a question if absolutely necessary.\nCurrent speaker memory:\n{}",
+                chat.user, chat.content, reply_size_instruction, brief_reaction_instruction, action_instruction(conversation_action), speaker_memory.join("\n")
             )
         } else {
             format!(
-                "Streamer {} said: {}\nThis is a live local cohost exchange. Reply in plain everyday language. Answer the literal latest line first. Only use recent chat or memory if it directly helps clarify the latest line. Do not invent scene details, weird metaphors, or theatrical phrasing. Reply in 1 or 2 conversational sentences under 42 words. Make a grounded statement first. Do not ask a follow-up question unless the user clearly asked one or asked for options. If the line appears garbled, incomplete, or low-confidence, return no reply instead of guessing.\nCurrent speaker memory:\n{}",
-                chat.user, chat.content, speaker_memory.join("\n")
+                "Streamer {} said: {}\nThis is a live local cohost exchange. Reply in plain everyday language. Answer the literal latest line first. Only use recent chat or memory if it directly helps clarify the latest line. Do not invent scene details, weird metaphors, or theatrical phrasing. {}\n{}\n{}\nMake a grounded statement first. Do not ask a follow-up question unless the user clearly asked one or asked for options. If the line appears garbled, incomplete, or low-confidence, use a short repair move instead of guessing.\nCurrent speaker memory:\n{}",
+                chat.user, chat.content, reply_size_instruction, brief_reaction_instruction, action_instruction(conversation_action), speaker_memory.join("\n")
             )
         }
     };
@@ -1056,6 +1304,7 @@ async fn process_chat_input(
     match response {
         Ok(mut text) => {
             text = sanitize_bot_output(&text);
+            text = clamp_reply_shape(&text, conversation_action);
             text = normalize_repetitive_question_reply(&text, story_mode || keep_talking_mode, &chat.content);
             text = stylize_reply_punctuation(&text);
             text = text.chars().take(config.moderation.max_reply_chars).collect();
@@ -1074,6 +1323,7 @@ async fn process_chat_input(
                     .await
                 {
                     retried = sanitize_bot_output(&retried);
+                    retried = clamp_reply_shape(&retried, conversation_action);
                     retried = normalize_repetitive_question_reply(&retried, story_mode || keep_talking_mode, &chat.content);
                     retried = stylize_reply_punctuation(&retried);
                     text = retried.chars().take(config.moderation.max_reply_chars).collect();
@@ -1103,6 +1353,9 @@ async fn process_chat_input(
             if send_to_twitch {
                 let wait_ms = config.moderation.minimum_reply_interval_ms;
                 *state.cooldown_until.write() = Some(Instant::now() + Duration::from_millis(wait_ms));
+            } else {
+                *state.local_turn_cooldown_until.write() =
+                    Some(Instant::now() + Duration::from_millis(1400));
             }
         }
         Err(err) => {
@@ -1589,18 +1842,24 @@ fn spawn_scheduled_messages(app: AppHandle, state: AppState) {
             }
 
             let cfg = state.0.config.read().clone();
-            let cadence = cfg
-                .behavior
-                .scheduled_messages_minutes
-                .filter(|v| *v > 0)
-                .map(|minutes| chrono::Duration::minutes(minutes as i64));
+            let cadence = if cfg.behavior.cohost_mode {
+                let derived_ms = (cfg.moderation.minimum_reply_interval_ms.saturating_mul(3)).clamp(12_000, 90_000);
+                Some(chrono::Duration::milliseconds(derived_ms as i64))
+            } else {
+                cfg.behavior
+                    .scheduled_messages_minutes
+                    .filter(|v| *v > 0)
+                    .map(|minutes| chrono::Duration::minutes(minutes as i64))
+            };
 
-            if let Some(cadence) = cadence {
+            if !cfg.behavior.cohost_mode {
+                next_checkin_at = None;
+            } else if let Some(cadence) = cadence {
                 if next_checkin_at.is_none() {
                     next_checkin_at = Some(now + cadence);
                 }
                 if next_checkin_at.is_some_and(|at| now >= at) {
-                    if cfg.behavior.cohost_mode && !*state.0.lurk_mode.read() {
+                    if !*state.0.lurk_mode.read() {
                         let _ = state
                             .0
                             .response_queue_tx
@@ -1615,11 +1874,9 @@ fn spawn_scheduled_messages(app: AppHandle, state: AppState) {
                     }
                     next_checkin_at = Some(now + cadence);
                 }
-            } else {
-                next_checkin_at = None;
             }
 
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     });
 }
