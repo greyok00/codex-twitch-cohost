@@ -14,7 +14,6 @@ import {
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LogicalSize } from '@tauri-apps/api/dpi';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { BrowserSpeechEngine, browserSpeechSupported } from './lib/voice-session/engines/browserSpeech';
 import { LocalFallbackSpeechEngine } from './lib/voice-session/engines/localFallback';
 import { WorkerBackedTranscriptService } from './lib/voice-session/WorkerBackedTranscriptService';
 import { buildVoiceInputFrame } from './lib/voice-session/VoiceFrameBuilder';
@@ -249,6 +248,11 @@ function normalizeSpeech(text: string) {
 
 function normalizeFamily(model: string) {
   return model.toLowerCase().replace(/:(latest|[\w.\-]+)$/i, '');
+}
+
+function voiceEngineLabel(engine: VoiceSessionState['engine']) {
+  if (engine === 'local-fallback') return 'Local Vosk';
+  return 'Idle';
 }
 
 function enrichModel(id: string): ModelMeta {
@@ -581,7 +585,7 @@ export default function App() {
     const sessionId = `vs_${Math.random().toString(36).slice(2, 10)}`;
     transcriptService.setStartedAt(Date.now());
     await transcriptService.reset();
-    const initialEngineKind: SpeechEngine['kind'] = browserSpeechSupported() ? 'browser-speech' : 'local-fallback';
+    const initialEngineKind: SpeechEngine['kind'] = 'local-fallback';
     setVoiceSession({ ...defaultVoiceSession(), sessionId, micEnabled: true, status: 'starting', engine: initialEngineKind });
 
     const callbacks: VoiceSessionCallbacks = {
@@ -638,32 +642,20 @@ export default function App() {
       }
     };
 
-    const buildEngine = (preferBrowser: boolean): SpeechEngine =>
-      preferBrowser && browserSpeechSupported()
-        ? new BrowserSpeechEngine(callbacks)
-        : new LocalFallbackSpeechEngine(callbacks);
+    const buildEngine = (): SpeechEngine => new LocalFallbackSpeechEngine(callbacks);
 
-    let engine = buildEngine(true);
+    let engine = buildEngine();
     speechEngineRef.current = engine;
     try {
       await engine.start();
       setVoiceSession((state) => ({ ...state, engine: engine.kind }));
     } catch (error) {
-      if (engine.kind === 'browser-speech') {
-        const repairedRuntime = await ensureSttReady(voiceRuntime);
-        if (repairedRuntime) setVoiceRuntime(repairedRuntime);
-        engine = buildEngine(false);
-        speechEngineRef.current = engine;
-        await engine.start();
-        setVoiceSession((state) => ({ ...state, engine: engine.kind }));
-      } else if (browserSpeechSupported()) {
-        engine = buildEngine(true);
-        speechEngineRef.current = engine;
-        await engine.start();
-        setVoiceSession((state) => ({ ...state, engine: engine.kind }));
-      } else {
-        throw error;
-      }
+      const repairedRuntime = await ensureSttReady(voiceRuntime);
+      if (repairedRuntime) setVoiceRuntime(repairedRuntime);
+      engine = buildEngine();
+      speechEngineRef.current = engine;
+      await engine.start();
+      setVoiceSession((state) => ({ ...state, engine: engine.kind }));
     }
   };
 
@@ -868,7 +860,7 @@ export default function App() {
               </div>
               <div className="status-block">
                 <div className="status-label"><IconMicrophone size={16} /> Mic</div>
-                <div className="status-value">{voiceSession.status} · {voiceSession.engine}</div>
+                <div className="status-value">{voiceSession.status} · {voiceEngineLabel(voiceSession.engine)}</div>
               </div>
               <div className="status-block">
                 <div className="status-label"><IconVolume size={16} /> Voice</div>
@@ -933,7 +925,7 @@ export default function App() {
                         void submitPrompt();
                       }
                     }}
-                    placeholder="Type a local prompt, send to Twitch, or use Mic On for browser speech..."
+                    placeholder="Type a local prompt, send to Twitch, or use Mic On for local Vosk speech..."
                     className="composer-textarea"
                   />
                   <div className="composer-toolbar">
@@ -1071,7 +1063,7 @@ export default function App() {
                   <div className="inset-content">
                     <div className="section-title">Voice Diagnostics</div>
                     <div className="diag-grid">
-                      <div className="diag-tile"><span className="diag-label">STT engine</span><span className="diag-value">{voiceSession.engine}</span></div>
+                      <div className="diag-tile"><span className="diag-label">STT engine</span><span className="diag-value">{voiceEngineLabel(voiceSession.engine)}</span></div>
                       <div className="diag-tile"><span className="diag-label">First interim</span><span className="diag-value">{voiceSession.firstInterimLatencyMs ?? 0} ms</span></div>
                       <div className="diag-tile"><span className="diag-label">Final latency</span><span className="diag-value">{voiceSession.finalLatencyMs ?? 0} ms</span></div>
                       <div className="diag-tile"><span className="diag-label">AI latency</span><span className="diag-value">{voiceSession.aiLatencyMs ?? 0} ms</span></div>

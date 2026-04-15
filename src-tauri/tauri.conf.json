@@ -33,12 +33,7 @@
       "assets/piper-linux/**/*",
       "assets/piper-macos/**/*",
       "assets/piper-win/**/*",
-      "assets/whisper/**/*",
-      "assets/whisper-linux/**/*",
-      "assets/whisper-macos/**/*",
-      "assets/whisper-win/**/*",
       "../config.example.json",
-      "../whisper.default.json",
       "../personality.example.json"
     ],
     "icon": [

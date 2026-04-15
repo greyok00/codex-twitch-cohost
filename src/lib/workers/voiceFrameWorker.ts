@@ -6,7 +6,7 @@ type BuildMessage = {
   payload: {
     sessionId: string;
     mode: 'owner' | 'public';
-    engine: 'browser-speech' | 'local-fallback' | 'none';
+    engine: 'local-fallback' | 'none';
     transcript: string;
     finalLatencyMs?: number | null;
   };

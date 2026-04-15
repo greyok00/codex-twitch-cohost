@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/screenshots/hero-command-center.png" alt="GreyOK Twitch Co-Host screenshot" width="1200" />
+  <img src="docs/screenshots/hero-grey-ui.png" alt="GreyOK Twitch Co-Host screenshot" width="1200" />
 </p>
 
 # GreyOK Twitch Co-Host
@@ -175,7 +175,7 @@ The capture script checks these local URLs in order:
 
 ### Near Term
 
-- stabilize browser speech vs local fallback selection
+- stabilize the Vosk-only local STT path
 - tighten TTS reliability while the mic is active
 - improve mouth, eye, and glow rig feedback
 - keep voice switching and persistence predictable across restarts
@@ -184,7 +184,7 @@ The capture script checks these local URLs in order:
 
 - reduce reliance on legacy `character` naming in config and commands
 - continue simplifying the app around `voice + tone + model`
-- improve diagnostics so browser STT failures report exact causes
+- add AssemblyAI as an optional cloud STT path with Vosk retained as the local fallback
 
 ### Future Capture / Vision Work
 
@@ -197,7 +197,9 @@ Extension-based capture is still under consideration, but it is not committed as
 
 ## Free Cloud Direction
 
-The most realistic free cloud-ish path for speech remains browser speech in a normal Chromium session.
+Near-term speech is centered on local Vosk for stability.
+
+The next cloud STT candidate is AssemblyAI, with Vosk retained as the fallback.
 
 For the future capture roadmap, the current plan is:
 

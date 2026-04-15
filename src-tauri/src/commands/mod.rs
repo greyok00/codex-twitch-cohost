@@ -4,12 +4,10 @@ use std::sync::Arc;
 #[cfg(not(target_os = "windows"))]
 use std::os::unix::fs::PermissionsExt;
 
-use futures_util::StreamExt;
 use tauri::{AppHandle, Emitter, Manager};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use base64::Engine;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
@@ -645,57 +643,6 @@ fn emit_stt_progress(app_handle: &AppHandle, stage: &str, progress: u8, message:
     );
 }
 
-fn detect_fast_whisper_binary(app_handle: Option<&AppHandle>) -> Option<String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(app) = app_handle {
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            let exe = if cfg!(target_os = "windows") {
-                "whisper-cli.exe"
-            } else {
-                "whisper-cli"
-            };
-            candidates.push(resource_dir.join("assets").join("whisper").join(exe));
-            candidates.push(resource_dir.join("whisper").join(exe));
-            if cfg!(target_os = "windows") {
-                candidates.push(resource_dir.join("assets").join("whisper-win").join(exe));
-            } else if cfg!(target_os = "macos") {
-                candidates.push(resource_dir.join("assets").join("whisper-macos").join(exe));
-            } else {
-                candidates.push(resource_dir.join("assets").join("whisper-linux").join(exe));
-            }
-        }
-    }
-    let exe = if cfg!(target_os = "windows") {
-        "whisper-cli.exe"
-    } else {
-        "whisper-cli"
-    };
-    candidates.push(PathBuf::from("./src-tauri/assets/whisper").join(exe));
-    if cfg!(target_os = "windows") {
-        candidates.push(PathBuf::from("./src-tauri/assets/whisper-win").join(exe));
-    } else if cfg!(target_os = "macos") {
-        candidates.push(PathBuf::from("./src-tauri/assets/whisper-macos").join(exe));
-    } else {
-        candidates.push(PathBuf::from("./src-tauri/assets/whisper-linux").join(exe));
-    }
-    candidates.push(PathBuf::from("/usr/bin/whisper-cli"));
-    candidates.push(PathBuf::from("/usr/local/bin/whisper-cli"));
-    candidates.push(PathBuf::from("/usr/bin/whisper"));
-    candidates.push(PathBuf::from("/usr/local/bin/whisper"));
-    candidates.push(PathBuf::from("/opt/homebrew/bin/whisper-cli"));
-    candidates.push(PathBuf::from("/opt/homebrew/bin/whisper"));
-    if let Some(found) = first_existing(&candidates) {
-        return Some(found);
-    }
-    if command_in_path("whisper-cli") {
-        return Some("whisper-cli".to_string());
-    }
-    if command_in_path("whisper") {
-        return Some("whisper".to_string());
-    }
-    None
-}
-
 fn detect_vosk_python_runtime() -> Option<String> {
     let candidates = if cfg!(target_os = "windows") {
         vec![
@@ -750,67 +697,6 @@ fn is_vosk_backend_name(value: &str) -> bool {
     matches!(value.trim(), "vosk" | "vosk-python")
 }
 
-fn detect_fast_whisper_model(app_handle: Option<&AppHandle>) -> Option<String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(app) = app_handle {
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            candidates.push(resource_dir.join("assets").join("whisper").join("ggml-tiny.en.bin"));
-            candidates.push(resource_dir.join("assets").join("whisper").join("ggml-base.en.bin"));
-            candidates.push(resource_dir.join("assets").join("whisper").join("ggml-small.en.bin"));
-            candidates.push(resource_dir.join("whisper").join("ggml-tiny.en.bin"));
-            candidates.push(resource_dir.join("whisper").join("ggml-base.en.bin"));
-            candidates.push(resource_dir.join("whisper").join("ggml-small.en.bin"));
-            if cfg!(target_os = "windows") {
-                candidates.push(resource_dir.join("assets").join("whisper-win").join("ggml-tiny.en.bin"));
-                candidates.push(resource_dir.join("assets").join("whisper-win").join("ggml-base.en.bin"));
-            } else if cfg!(target_os = "macos") {
-                candidates.push(resource_dir.join("assets").join("whisper-macos").join("ggml-tiny.en.bin"));
-                candidates.push(resource_dir.join("assets").join("whisper-macos").join("ggml-base.en.bin"));
-            } else {
-                candidates.push(resource_dir.join("assets").join("whisper-linux").join("ggml-tiny.en.bin"));
-                candidates.push(resource_dir.join("assets").join("whisper-linux").join("ggml-base.en.bin"));
-            }
-        }
-        if let Ok(app_data) = app.path().app_data_dir() {
-            candidates.push(app_data.join("models").join("whisper").join("ggml-tiny.en.bin"));
-            candidates.push(app_data.join("models").join("whisper").join("ggml-base.en.bin"));
-            candidates.push(app_data.join("models").join("whisper").join("ggml-small.en.bin"));
-        }
-    }
-    candidates.push(PathBuf::from("./src-tauri/assets/whisper/ggml-tiny.en.bin"));
-    candidates.push(PathBuf::from("./src-tauri/assets/whisper/ggml-base.en.bin"));
-    candidates.push(PathBuf::from("./src-tauri/assets/whisper/ggml-small.en.bin"));
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(
-            PathBuf::from(&home)
-                .join(".cache")
-                .join("whisper.cpp")
-                .join("ggml-tiny.en.bin"),
-        );
-        candidates.push(
-            PathBuf::from(&home)
-                .join(".cache")
-                .join("whisper.cpp")
-                .join("ggml-base.en.bin"),
-        );
-        candidates.push(
-            PathBuf::from(&home)
-                .join(".cache")
-                .join("whisper.cpp")
-                .join("ggml-small.en.bin"),
-        );
-        candidates.push(PathBuf::from(&home).join("models").join("ggml-tiny.en.bin"));
-        candidates.push(PathBuf::from(&home).join("models").join("ggml-base.en.bin"));
-        candidates.push(PathBuf::from(&home).join("models").join("whisper").join("ggml-tiny.en.bin"));
-        candidates.push(PathBuf::from(&home).join("models").join("whisper").join("ggml-base.en.bin"));
-    }
-    candidates.push(PathBuf::from("./models/ggml-tiny.en.bin"));
-    candidates.push(PathBuf::from("./models/ggml-base.en.bin"));
-    candidates.push(PathBuf::from("./models/whisper/ggml-tiny.en.bin"));
-    candidates.push(PathBuf::from("./models/whisper/ggml-base.en.bin"));
-    first_existing(&candidates)
-}
-
 fn is_path_like(binary: &str) -> bool {
     binary.contains('/') || binary.contains('\\')
 }
@@ -860,34 +746,19 @@ async fn resolve_or_repair_stt_config(
     }
 
     let current_bin = cfg.stt_binary_path.clone().unwrap_or_default();
-    let using_vosk = is_vosk_backend_name(&current_bin);
     let bin_ok = !current_bin.trim().is_empty() && can_execute_binary(current_bin.trim());
     if !bin_ok {
-        if let Some(model) = detect_vosk_model(Some(app_handle)) {
-            if detect_vosk_python_runtime().is_some() {
-                cfg.stt_binary_path = Some("vosk".to_string());
-                cfg.stt_model_path = Some(model);
-                changed = true;
-            }
-        } else if let Some(bin) = detect_fast_whisper_binary(Some(app_handle)) {
-            cfg.stt_binary_path = Some(bin);
+        if let (Some(_runtime), Some(model)) = (detect_vosk_python_runtime(), detect_vosk_model(Some(app_handle))) {
+            cfg.stt_binary_path = Some("vosk".to_string());
+            cfg.stt_model_path = Some(model);
             changed = true;
         }
     }
 
     let current_model = cfg.stt_model_path.clone().unwrap_or_default();
-    let model_ok = if using_vosk || is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
-        !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_dir()
-    } else {
-        !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_file()
-    };
+    let model_ok = !current_model.trim().is_empty() && PathBuf::from(current_model.trim()).is_dir();
     if !model_ok {
-        if is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
-            if let Some(model) = detect_vosk_model(Some(app_handle)) {
-                cfg.stt_model_path = Some(model);
-                changed = true;
-            }
-        } else if let Some(model) = detect_fast_whisper_model(Some(app_handle)) {
+        if let Some(model) = detect_vosk_model(Some(app_handle)) {
             cfg.stt_model_path = Some(model);
             changed = true;
         }
@@ -902,11 +773,7 @@ async fn resolve_or_repair_stt_config(
             .as_deref()
             .is_some_and(|m| {
                 let path = PathBuf::from(m.trim());
-                if is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
-                    path.is_dir()
-                } else {
-                    path.is_file()
-                }
+                path.is_dir()
             });
 
     if ready && !cfg.stt_enabled {
@@ -921,7 +788,7 @@ async fn resolve_or_repair_stt_config(
     }
 
     if !ready {
-        return Err("STT runtime is missing. Use Voice -> Auto-configure STT, then retry mic.".to_string());
+        return Err("Vosk STT runtime is missing. Use Voice -> Auto-configure STT, then retry mic.".to_string());
     }
 
     Ok(cfg)
@@ -960,177 +827,6 @@ async fn synthesize_tts_cloud_with_voice(clean: &str, voice: &str) -> Result<Str
     crate::tts::synthesize_tts_with_voice(clean, voice).await
 }
 
-async fn try_download_fast_whisper_model(app_handle: &AppHandle) -> Result<Option<String>, String> {
-    let app_data = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
-    let dir = app_data.join("models").join("whisper");
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| format!("failed creating whisper model directory: {e}"))?;
-    let target = dir.join("ggml-tiny.en.bin");
-    if target.exists() {
-        emit_stt_progress(app_handle, "model_detected", 92, "Whisper model already available.");
-        return Ok(Some(target.to_string_lossy().to_string()));
-    }
-
-    emit_stt_progress(app_handle, "model_download", 60, "Downloading Whisper tiny model...");
-    let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin";
-    let resp = reqwest::Client::new()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("failed downloading whisper model: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("whisper model download failed with status {}", resp.status()));
-    }
-    let total = resp.content_length().unwrap_or(0);
-    let mut file = tokio::fs::File::create(&target)
-        .await
-        .map_err(|e| format!("failed creating whisper model file: {e}"))?;
-    let mut downloaded: u64 = 0;
-    let mut stream = resp.bytes_stream();
-    while let Some(next) = stream.next().await {
-        let chunk = next.map_err(|e| format!("failed reading whisper model payload: {e}"))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| format!("failed writing whisper model file: {e}"))?;
-        downloaded += chunk.len() as u64;
-        let progress = if total > 0 {
-            let span = ((downloaded.saturating_mul(30)) / total).min(30) as u8;
-            60_u8.saturating_add(span)
-        } else {
-            75
-        };
-        emit_stt_progress(
-            app_handle,
-            "model_download",
-            progress,
-            format!("Downloading model... {} MB", downloaded / (1024 * 1024)),
-        );
-    }
-    file.flush()
-        .await
-        .map_err(|e| format!("failed finalizing whisper model file: {e}"))?;
-    emit_stt_progress(app_handle, "model_download", 92, "Whisper model download complete.");
-    Ok(Some(target.to_string_lossy().to_string()))
-}
-
-fn detect_built_whisper_binary(src_root: &std::path::Path) -> Option<PathBuf> {
-    let mut candidates = vec![
-        src_root.join("build").join("bin").join("whisper-cli"),
-        src_root.join("build").join("bin").join("main"),
-    ];
-    if cfg!(target_os = "windows") {
-        candidates.push(src_root.join("build").join("bin").join("whisper-cli.exe"));
-        candidates.push(src_root.join("build").join("bin").join("main.exe"));
-    }
-    candidates.into_iter().find(|p| p.exists())
-}
-
-async fn try_provision_whisper_binary(app_handle: &AppHandle) -> Result<Option<String>, String> {
-    if let Some(found) = detect_fast_whisper_binary(Some(app_handle)) {
-        emit_stt_progress(app_handle, "binary_detected", 35, "Whisper executable already available.");
-        return Ok(Some(found));
-    }
-
-    let app_data = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("app_data_dir unavailable: {e}"))?;
-    let runtime_dir = app_data.join("whisper-runtime");
-    let src_dir = runtime_dir.join("src");
-    let bin_dir = runtime_dir.join("bin");
-    let target_name = if cfg!(target_os = "windows") { "whisper-cli.exe" } else { "whisper-cli" };
-    let target_bin = bin_dir.join(target_name);
-    tokio::fs::create_dir_all(&bin_dir)
-        .await
-        .map_err(|e| format!("failed creating whisper runtime dirs: {e}"))?;
-
-    if target_bin.exists() {
-        emit_stt_progress(app_handle, "binary_detected", 35, "Whisper executable already available.");
-        return Ok(Some(target_bin.to_string_lossy().to_string()));
-    }
-
-    // Build whisper.cpp locally into app data when no system binary exists.
-    if !src_dir.exists() {
-        emit_stt_progress(app_handle, "clone", 18, "Cloning whisper.cpp...");
-        let clone = tokio::process::Command::new("git")
-            .args([
-                "clone",
-                "--depth",
-                "1",
-                "https://github.com/ggml-org/whisper.cpp.git",
-            ])
-            .arg(&src_dir)
-            .output()
-            .await
-            .map_err(|e| format!("failed launching git clone: {e}"))?;
-        if !clone.status.success() {
-            return Err(format!(
-                "failed cloning whisper.cpp; ensure git/network is available: {}",
-                String::from_utf8_lossy(&clone.stderr).trim()
-            ));
-        }
-    }
-
-    emit_stt_progress(app_handle, "cmake_configure", 28, "Configuring whisper build...");
-    let cmake_cfg = tokio::process::Command::new("cmake")
-        .current_dir(&src_dir)
-        .args([
-            "-B",
-            "build",
-            "-DWHISPER_BUILD_TESTS=OFF",
-            "-DWHISPER_BUILD_SERVER=OFF",
-            "-DWHISPER_BUILD_EXAMPLES=ON",
-        ])
-        .output()
-        .await
-        .map_err(|e| format!("failed launching cmake configure: {e}"))?;
-    if !cmake_cfg.status.success() {
-        return Err(format!(
-            "cmake configure failed: {}",
-            String::from_utf8_lossy(&cmake_cfg.stderr).trim()
-        ));
-    }
-
-    emit_stt_progress(app_handle, "cmake_build", 42, "Building whisper executable...");
-    let cmake_build = tokio::process::Command::new("cmake")
-        .current_dir(&src_dir)
-        .args(["--build", "build", "--config", "Release", "-j", "2"])
-        .output()
-        .await
-        .map_err(|e| format!("failed launching cmake build: {e}"))?;
-    if !cmake_build.status.success() {
-        return Err(format!(
-            "cmake build failed: {}",
-            String::from_utf8_lossy(&cmake_build.stderr).trim()
-        ));
-    }
-
-    let built = detect_built_whisper_binary(&src_dir).ok_or_else(|| {
-        "whisper build completed but executable was not found in build/bin".to_string()
-    })?;
-
-    tokio::fs::copy(&built, &target_bin)
-        .await
-        .map_err(|e| format!("failed copying built whisper binary: {e}"))?;
-    #[cfg(not(target_os = "windows"))]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = tokio::fs::metadata(&target_bin)
-            .await
-            .map_err(|e| format!("failed reading binary permissions: {e}"))?
-            .permissions();
-        perms.set_mode(0o755);
-        tokio::fs::set_permissions(&target_bin, perms)
-            .await
-            .map_err(|e| format!("failed setting executable permissions: {e}"))?;
-    }
-    emit_stt_progress(app_handle, "binary_ready", 55, "Whisper executable is ready.");
-    Ok(Some(target_bin.to_string_lossy().to_string()))
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1893,7 +1589,7 @@ async fn build_voice_runtime_report(
         } else if detect_vosk_python_runtime().is_some() && detect_vosk_model(Some(app_handle)).is_some() {
             Some("vosk".to_string())
         } else {
-            detect_fast_whisper_binary(Some(app_handle))
+            None
         };
         match resolved_bin.as_ref() {
             Some(bin) if is_vosk_backend_name(bin) => push(
@@ -1901,34 +1597,28 @@ async fn build_voice_runtime_report(
                 "pass",
                 "Using local Vosk runtime via the project venv.".to_string(),
             ),
-            Some(bin) => push("STT binary", "pass", format!("Using STT binary: {bin}")),
             None => push(
                 "STT backend",
                 "fail",
-                "No usable local STT backend found. Install Vosk or whisper-cli.".to_string(),
+                "No usable local Vosk backend found. Install Vosk and its model, then run auto-configure.".to_string(),
             ),
+            Some(bin) => push("STT backend", "warn", format!("Unexpected STT backend configured: {bin}")),
         }
 
         let requested_model = cfg.stt_model_path.clone().unwrap_or_default();
-        let resolved_model = if !requested_model.trim().is_empty()
-            && if is_vosk_backend_name(cfg.stt_binary_path.as_deref().unwrap_or_default()) {
-                PathBuf::from(&requested_model).is_dir()
-            } else {
-                PathBuf::from(&requested_model).is_file()
-            }
-        {
+        let resolved_model = if !requested_model.trim().is_empty() && PathBuf::from(&requested_model).is_dir() {
             Some(requested_model)
         } else if is_vosk_backend_name(resolved_bin.as_deref().unwrap_or_default()) {
             detect_vosk_model(Some(app_handle))
         } else {
-            detect_fast_whisper_model(Some(app_handle))
+            None
         };
         match resolved_model.as_ref() {
             Some(model) => push("STT model", "pass", format!("Using STT model: {model}")),
             None => push(
                 "STT model",
                 "fail",
-                "No local STT model found. Configure STT model path or run STT auto-configure.".to_string(),
+                "No local Vosk model found. Configure a Vosk model path or run STT auto-configure.".to_string(),
             ),
         }
 
@@ -1950,11 +1640,7 @@ async fn build_voice_runtime_report(
                     push(
                         "STT process smoke test",
                         "pass",
-                        if is_vosk_backend_name(smoke_cfg.stt_binary_path.as_deref().unwrap_or_default()) {
-                            "Vosk runtime launched and returned a transcript payload.".to_string()
-                        } else {
-                            "Whisper process launched and returned a transcript payload.".to_string()
-                        },
+                        "Vosk runtime launched and returned a transcript payload.".to_string(),
                     );
                 }
                 Ok(Err(err)) => push("STT process smoke test", "fail", err.to_string()),
@@ -2078,17 +1764,15 @@ async fn build_service_health_report(
 
     let stt_requested_bin = cfg.voice.stt_binary_path.clone().unwrap_or_default();
     let stt_bin_available = if stt_requested_bin.trim().is_empty() {
-        detect_vosk_python_runtime().is_some() || detect_fast_whisper_binary(Some(app_handle)).is_some()
+        detect_vosk_python_runtime().is_some()
     } else {
         can_execute_binary(&stt_requested_bin)
     };
     let stt_requested_model = cfg.voice.stt_model_path.clone().unwrap_or_default();
     let stt_model_available = if stt_requested_model.trim().is_empty() {
-        detect_vosk_model(Some(app_handle)).is_some() || detect_fast_whisper_model(Some(app_handle)).is_some()
-    } else if is_vosk_backend_name(&stt_requested_bin) {
-        PathBuf::from(&stt_requested_model).is_dir()
+        detect_vosk_model(Some(app_handle)).is_some()
     } else {
-        PathBuf::from(&stt_requested_model).is_file()
+        PathBuf::from(&stt_requested_model).is_dir()
     };
     let tts_available = edge_tts_candidates().into_iter().any(|bin| can_execute_binary(&bin));
 
@@ -2533,25 +2217,17 @@ pub async fn auto_configure_stt_fast(
     state: tauri::State<'_, AppState>,
 ) -> Result<SttAutoConfigResult, String> {
     let _permit = acquire_stt_permit(&state.0).await?;
-    emit_stt_progress(&app_handle, "start", 3, "Starting Whisper setup...");
-    emit_stt_progress(&app_handle, "scan_binary", 8, "Checking local STT runtime...");
+    emit_stt_progress(&app_handle, "start", 3, "Starting Vosk setup...");
+    emit_stt_progress(&app_handle, "scan_binary", 8, "Checking local Vosk runtime...");
     let vosk_runtime = detect_vosk_python_runtime();
     emit_stt_progress(&app_handle, "scan_model", 32, "Checking Vosk model...");
     let vosk_model = detect_vosk_model(Some(&app_handle));
-    let (detected_binary, detected_model, backend_label) = if vosk_runtime.is_some() && vosk_model.is_some() {
-        (Some("vosk".to_string()), vosk_model, "Vosk")
+    let detected_binary = if vosk_runtime.is_some() {
+        Some("vosk".to_string())
     } else {
-        emit_stt_progress(&app_handle, "fallback_whisper", 48, "Falling back to Whisper runtime...");
-        let detected_binary = match detect_fast_whisper_binary(Some(&app_handle)) {
-            Some(v) => Some(v),
-            None => try_provision_whisper_binary(&app_handle).await?,
-        };
-        let mut detected_model = detect_fast_whisper_model(Some(&app_handle));
-        if detected_model.is_none() {
-            detected_model = try_download_fast_whisper_model(&app_handle).await?;
-        }
-        (detected_binary, detected_model, "Whisper")
+        None
     };
+    let detected_model = vosk_model;
     let mut cfg = state.0.config.write();
     cfg.voice.stt_binary_path = detected_binary.clone();
     cfg.voice.stt_model_path = detected_model.clone();
@@ -2560,16 +2236,14 @@ pub async fn auto_configure_stt_fast(
     cfg.save_to_disk().map_err(|e| e.to_string())?;
 
     let applied = cfg.voice.stt_enabled;
-    let message = if applied && backend_label == "Vosk" {
-        "Fast STT config applied (local Vosk model ready).".to_string()
-    } else if applied {
-        "Fast STT config applied (model + whisper executable ready).".to_string()
+    let message = if applied {
+        "Fast STT config applied (local Vosk runtime and model ready).".to_string()
     } else if detected_model.is_some() && detected_binary.is_none() {
-        "STT model is ready, but no usable local STT runtime was found.".to_string()
+        "Vosk model is ready, but the local Vosk runtime was not found.".to_string()
     } else if detected_model.is_none() && detected_binary.is_some() {
-        "STT runtime is ready, but model was not found/downloaded. Retry auto-configure.".to_string()
+        "Vosk runtime is ready, but no Vosk model was found. Install the model, then retry auto-configure.".to_string()
     } else {
-        "STT setup incomplete: missing model or runtime.".to_string()
+        "Vosk setup incomplete: missing runtime or model.".to_string()
     };
     emit_stt_progress(&app_handle, if applied { "done" } else { "incomplete" }, 100, message.clone());
 

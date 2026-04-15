@@ -194,7 +194,7 @@ export interface PublicCallSettings {
 export interface VoiceSessionDiagnostics {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'browser-speech' | 'local-fallback' | 'none';
+  engine: 'local-fallback' | 'none';
   status: 'idle' | 'starting' | 'listening' | 'processing' | 'replying' | 'error';
   interimText: string;
   lastFinalText: string;
@@ -210,7 +210,7 @@ export interface VoiceSessionDiagnostics {
 export interface VoiceInputFrame {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'browser-speech' | 'local-fallback' | 'none';
+  engine: 'local-fallback' | 'none';
   transcript: string;
   normalizedTranscript: string;
   commandHint?: string | null;

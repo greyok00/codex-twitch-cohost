@@ -14,12 +14,12 @@ export class LocalFallbackSpeechEngine implements SpeechEngine {
   async start(): Promise<void> {
     this.active = true;
     const thisLoop = ++this.loopId;
-    this.callbacks.onStatus('starting', 'Starting local fallback STT...');
+    this.callbacks.onStatus('starting', 'Starting local Vosk STT...');
     void this.run(thisLoop);
   }
 
   private async run(loopId: number) {
-    this.callbacks.onStatus('listening', 'Local fallback STT active.');
+    this.callbacks.onStatus('listening', 'Local Vosk STT active.');
     while (this.active && loopId === this.loopId) {
       try {
         const text = (await transcribeMicChunk(1100)).trim();
@@ -29,7 +29,7 @@ export class LocalFallbackSpeechEngine implements SpeechEngine {
         }
       } catch (error) {
         this.callbacks.onError(String(error));
-        this.callbacks.onStatus('error', 'Local fallback STT failed.');
+        this.callbacks.onStatus('error', 'Local Vosk STT failed.');
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 80));
@@ -39,7 +39,7 @@ export class LocalFallbackSpeechEngine implements SpeechEngine {
   async stop(): Promise<void> {
     this.active = false;
     this.loopId += 1;
-    this.callbacks.onStatus('idle', 'Local fallback STT stopped.');
+    this.callbacks.onStatus('idle', 'Local Vosk STT stopped.');
   }
 
   async dispose(): Promise<void> {

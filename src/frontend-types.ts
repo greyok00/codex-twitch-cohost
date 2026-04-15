@@ -117,7 +117,7 @@ export interface TtsVoiceSettings {
 export interface VoiceInputFrame {
   sessionId: string;
   mode: 'owner' | 'public';
-  engine: 'browser-speech' | 'local-fallback' | 'none';
+  engine: 'local-fallback' | 'none';
   transcript: string;
   normalizedTranscript: string;
   commandHint?: string | null;
@@ -184,7 +184,7 @@ export interface BackendConsoleResult {
 
 export interface VoiceSessionState {
   sessionId: string;
-  engine: 'browser-speech' | 'local-fallback' | 'none';
+  engine: 'local-fallback' | 'none';
   status: 'idle' | 'starting' | 'listening' | 'processing' | 'replying' | 'error';
   interimText: string;
   lastFinalText: string;

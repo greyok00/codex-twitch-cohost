@@ -2,7 +2,6 @@ import { get } from 'svelte/store';
 import { setRecordingSpeechBlock, stopBotSpeech, submitVoiceSessionFrame } from '../api/tauri';
 import { botLogStore } from '../stores/app';
 import { voiceSessionStore } from './store';
-import { BrowserSpeechEngine, browserSpeechSupported } from './engines/browserSpeech';
 import { LocalFallbackSpeechEngine } from './engines/localFallback';
 import { WorkerBackedTranscriptService } from './WorkerBackedTranscriptService';
 import { buildVoiceInputFrame } from './VoiceFrameBuilder';
@@ -46,9 +45,10 @@ export class VoiceSessionController {
         });
       },
       onFinal: async (text) => {
-        const normalized = this.engine?.kind === 'browser-speech'
-          ? await this.transcriptService.pushFinal(text)
-          : { committed: text.trim() || null, finalLatencyMs: this.startedAt ? Date.now() - this.startedAt : null };
+        const normalized = {
+          committed: text.trim() || null,
+          finalLatencyMs: this.startedAt ? Date.now() - this.startedAt : null
+        };
         const committed = normalized.committed;
         if (!committed) {
           voiceSessionStore.update((state) => ({
@@ -124,9 +124,7 @@ export class VoiceSessionController {
       lastError: null
     }));
     const callbacks = this.bindCallbacks();
-    this.engine = browserSpeechSupported()
-      ? new BrowserSpeechEngine(callbacks)
-      : new LocalFallbackSpeechEngine(callbacks);
+    this.engine = new LocalFallbackSpeechEngine(callbacks);
     voiceSessionStore.update((state) => ({
       ...state,
       engine: this.engine?.kind ?? 'none',
