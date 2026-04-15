@@ -13,12 +13,12 @@ body,
 }
 
 body {
-  color: #eef2f7;
+  color: #eef1f4;
   background:
-    radial-gradient(circle at 12% 10%, rgba(255, 255, 255, 0.08), transparent 24%),
-    radial-gradient(circle at 88% 18%, rgba(155, 163, 175, 0.08), transparent 22%),
-    radial-gradient(circle at 54% 92%, rgba(107, 114, 128, 0.08), transparent 26%),
-    linear-gradient(180deg, #0b0d10 0%, #121519 42%, #0a0c0f 100%);
+    radial-gradient(circle at 12% 10%, rgba(255, 255, 255, 0.05), transparent 24%),
+    radial-gradient(circle at 88% 18%, rgba(180, 180, 180, 0.06), transparent 22%),
+    radial-gradient(circle at 54% 92%, rgba(110, 110, 110, 0.07), transparent 26%),
+    linear-gradient(180deg, #2d2e31 0%, #242528 42%, #1c1d1f 100%);
 }
 
 button,
@@ -30,7 +30,7 @@ select {
 
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #c6e7ff;
+  color: #d7d7da;
 }
 
 .desktop-root {
@@ -59,12 +59,12 @@ code {
   font-size: 26px;
   font-weight: 800;
   letter-spacing: -0.02em;
-  color: #f4fbff;
+  color: #f4f4f5;
 }
 
 .hero-subtitle {
   margin-top: 4px;
-  color: rgba(220, 235, 255, 0.68);
+  color: rgba(229, 229, 232, 0.68);
   font-size: 13px;
 }
 
@@ -107,14 +107,14 @@ code {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: rgba(203, 226, 255, 0.56);
+  color: rgba(224, 224, 228, 0.56);
   font-weight: 700;
 }
 
 .status-value {
   margin-top: 8px;
   font-size: 14px;
-  color: #eef6ff;
+  color: #ececef;
   font-weight: 600;
   line-height: 1.35;
 }
@@ -148,7 +148,7 @@ code {
 .glass-field-hint,
 .runtime-toggle-description,
 .small-copy {
-  color: rgba(220, 235, 255, 0.62);
+  color: rgba(235, 238, 242, 0.62);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -157,8 +157,9 @@ code {
 .character-pane {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
+  overflow: hidden;
 }
 
 .panel-stack {
@@ -166,6 +167,11 @@ code {
   display: grid;
   gap: 14px;
   align-content: start;
+}
+
+.character-pane > .panel-stack {
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .compact-stack {
@@ -179,8 +185,8 @@ code {
 }
 
 .glass-inset {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
@@ -211,7 +217,7 @@ code {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--user-accent, #94a3b8);
+  color: var(--user-accent, #b4b4bc);
   font-weight: 800;
   margin-bottom: 8px;
 }
@@ -270,7 +276,7 @@ code {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   font-weight: 800;
-  color: rgba(226, 240, 255, 0.88);
+  color: rgba(232, 232, 236, 0.88);
 }
 
 .section-title {
@@ -285,9 +291,9 @@ code {
 
 .preset-tile {
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: #eef6ff;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.05);
+  color: #eef1f4;
   padding: 12px;
   text-align: left;
   cursor: pointer;
@@ -298,7 +304,7 @@ code {
 
 .preset-tile:hover {
   transform: translateY(-1px);
-  border-color: rgba(180, 228, 255, 0.26);
+  border-color: rgba(210, 210, 210, 0.22);
 }
 
 .preset-tile.active {
@@ -319,7 +325,7 @@ code {
 .avatar-natural-size,
 .slider-field-value,
 .avatar-control-value {
-  color: rgba(220, 235, 255, 0.6);
+  color: rgba(220, 220, 225, 0.6);
   font-size: 12px;
 }
 
@@ -336,7 +342,7 @@ code {
 .selected-name {
   font-size: 22px;
   font-weight: 800;
-  color: #f4fbff;
+  color: #f4f5f6;
 }
 
 .tuning-grid-compact {
@@ -375,22 +381,29 @@ code {
 .subtabs-list {
   justify-content: flex-start;
   gap: 10px;
-  padding: 0.55rem 0.85rem 0.18rem;
+  padding: 0.08rem 0.08rem 0;
   height: auto;
-  border-radius: 22px 22px 12px 12px;
+  border-radius: 0;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
 }
 
 .folder-tab-trigger,
 .subtab-trigger {
   min-height: 46px;
   padding: 0 20px 7px;
-  border-radius: 16px 16px 8px 8px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.14);
+  border-radius: 16px 16px 0 0;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-bottom: 0;
+  background: rgba(255,255,255,0.05);
+  box-shadow: none;
 }
 
 .folder-tab-trigger[data-state='active'],
 .subtab-trigger[data-state='active'] {
-  transform: translateY(-5px);
+  transform: translateY(-2px);
+  background: rgba(255,255,255,0.1);
 }
 
 .model-list-grid,
@@ -418,7 +431,7 @@ code {
 .diag-value {
   font-size: 14px;
   font-weight: 700;
-  color: #f4fbff;
+  color: #f4f4f5;
 }
 
 .runtime-toggle {
@@ -465,7 +478,7 @@ code {
 .diag-label,
 .backend-module-age,
 .backend-module-message {
-  color: rgba(220, 235, 255, 0.62);
+  color: rgba(220, 220, 225, 0.62);
   font-size: 12px;
 }
 
@@ -562,8 +575,16 @@ code {
   width: 66%;
   height: 70%;
   border-radius: 999px;
-  background: radial-gradient(circle, rgba(255, 255, 255, calc(0.08 + var(--glow) * 0.12)), rgba(107, 114, 128, 0.08), transparent 70%);
-  filter: blur(34px);
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, calc(0.05 + var(--glow) * 0.26)) 0%,
+    rgba(214, 214, 216, calc(0.03 + var(--glow) * 0.14)) 26%,
+    rgba(107, 114, 128, calc(0.02 + var(--glow) * 0.09)) 48%,
+    transparent 72%
+  );
+  opacity: calc(0.18 + var(--glow) * 0.95);
+  transform: scale(calc(0.82 + var(--glow) * 0.42));
+  filter: blur(calc(18px + var(--glow) * 42px));
 }
 
 .avatar-jar {
@@ -627,7 +648,8 @@ code {
   background: linear-gradient(180deg, rgba(9, 13, 22, 0.72), rgba(9, 13, 22, 0.06));
   mix-blend-mode: multiply;
   filter: blur(2px);
-  transform: scaleY(calc(1.2 - var(--eye-open) * 0.007));
+  opacity: calc(0.92 - var(--eye-open) * 0.006);
+  transform: scaleY(calc(1.45 - var(--eye-open) * 0.013)) translateY(calc(var(--eye-open) * 0.01px));
 }
 
 .avatar-eye-mask-left { left: 25%; }
@@ -670,8 +692,8 @@ code {
 .avatar-mouth-outer {
   position: relative;
   width: 100%;
-  min-height: 8px;
-  height: calc(6px + var(--mouth-open) * 0.12);
+  min-height: 4px;
+  height: calc(2px + var(--mouth-open) * 0.22);
   border-radius: 0 0 999px 999px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--mouth-color) 70%, white 16%), color-mix(in srgb, var(--mouth-color) 92%, black 8%));
   box-shadow:

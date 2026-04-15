@@ -140,6 +140,14 @@ export interface VoiceRuntimeReport {
   checks: VoiceRuntimeCheck[];
 }
 
+export interface SttAutoConfigResult {
+  applied: boolean;
+  message: string;
+  sttEnabled: boolean;
+  sttBinaryPath?: string | null;
+  sttModelPath?: string | null;
+}
+
 export interface HeadlessStatusView {
   configPath: string;
   model: string;

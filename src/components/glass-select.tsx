@@ -24,7 +24,7 @@ const GlassSelectTrigger = React.forwardRef<
       "shadow-[0_4px_16px_rgba(0,0,0,0.2)]",
       "transition-all duration-300",
       "focus:outline-none focus:border-white/40 focus:bg-white/15",
-      "focus:ring-2 focus:ring-cyan-400/30 focus:ring-offset-0",
+      "focus:ring-2 focus:ring-zinc-300/30 focus:ring-offset-0",
       "disabled:cursor-not-allowed disabled:opacity-50",
       "[&>span]:line-clamp-1",
       className,
@@ -76,7 +76,7 @@ const GlassSelectContent = React.forwardRef<
       ref={ref}
       className={cn(
         "relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-xl",
-        "bg-white/10 backdrop-blur-2xl border border-white/20",
+        "bg-[#1f2023]/96 backdrop-blur-2xl border border-white/12",
         "shadow-[0_8px_32px_rgba(0,0,0,0.4)]",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
@@ -112,7 +112,7 @@ const GlassSelectLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Label
     ref={ref}
-    className={cn("px-2 py-1.5 text-sm font-semibold text-white/60", className)}
+    className={cn("px-2 py-1.5 text-sm font-semibold text-zinc-300", className)}
     {...props}
   />
 ))
@@ -126,7 +126,7 @@ const GlassSelectItem = React.forwardRef<
     ref={ref}
     className={cn(
       "relative flex w-full cursor-pointer select-none items-center rounded-lg py-2 pl-8 pr-2 text-sm",
-      "text-white/80 outline-none",
+      "text-zinc-100 outline-none",
       "focus:bg-white/10 focus:text-white",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       "transition-colors duration-150",
@@ -136,7 +136,7 @@ const GlassSelectItem = React.forwardRef<
   >
     <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
       <SelectPrimitive.ItemIndicator>
-        <Check className="h-4 w-4 text-cyan-400" />
+        <Check className="h-4 w-4 text-zinc-100" />
       </SelectPrimitive.ItemIndicator>
     </span>
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>

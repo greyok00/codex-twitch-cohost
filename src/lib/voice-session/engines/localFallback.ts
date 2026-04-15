@@ -22,7 +22,7 @@ export class LocalFallbackSpeechEngine implements SpeechEngine {
     this.callbacks.onStatus('listening', 'Local fallback STT active.');
     while (this.active && loopId === this.loopId) {
       try {
-        const text = (await transcribeMicChunk(1800)).trim();
+        const text = (await transcribeMicChunk(1100)).trim();
         if (!this.active || loopId !== this.loopId) break;
         if (text) {
           await this.callbacks.onFinal(text);

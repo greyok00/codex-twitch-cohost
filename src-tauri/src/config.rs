@@ -224,8 +224,8 @@ impl Default for AppConfig {
             },
             personality: PersonalityProfile::default(),
             voice: VoiceConfig {
-                enabled: false,
-                voice_name: Some("en_US-lessac-medium".to_string()),
+                enabled: true,
+                voice_name: Some("en-US-GuyNeural".to_string()),
                 volume_percent: Some(100),
                 piper_binary_path: None,
                 piper_model_path: None,
@@ -290,13 +290,13 @@ impl Default for SceneConfig {
 impl Default for CharacterStudioConfig {
     fn default() -> Self {
         Self {
-            selected_preset: "basic-assistant".to_string(),
-            warmth: 70,
+            selected_preset: "guy".to_string(),
+            warmth: 55,
             humor: 35,
-            flirt: 0,
-            edge: 5,
-            energy: 40,
-            story: 35,
+            flirt: 10,
+            edge: 15,
+            energy: 60,
+            story: 40,
             extra_direction: String::new(),
         }
     }

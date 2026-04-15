@@ -18,9 +18,14 @@ async function ensureDirs() {
 
 async function stableScreenshot(page) {
   await page.waitForTimeout(1200);
+  await page.evaluate(() => {
+    for (const node of document.querySelectorAll('.banner-error')) {
+      node.remove();
+    }
+  });
   await page.screenshot({
     path: heroScreenshot,
-    fullPage: true
+    fullPage: false
   });
 }
 

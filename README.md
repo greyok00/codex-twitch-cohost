@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/screenshots/hero-command-center.png" alt="GreyOK Command Center screenshot" width="1200" />
+  <img src="docs/screenshots/hero-command-center.png" alt="GreyOK Twitch Co-Host screenshot" width="1200" />
 </p>
 
 # GreyOK Twitch Co-Host
 
-Desktop Twitch co-host built with Tauri, Rust, React, and a browser-safe voice/chat fallback for local testing.
+Desktop Twitch co-host built with Tauri, Rust, and React.
 
 ## Downloads
 
@@ -13,18 +13,40 @@ Desktop Twitch co-host built with Tauri, Rust, React, and a browser-safe voice/c
 - Windows: `greyok-cohost-<version>-windows-x64.exe`
 - macOS: `greyok-cohost-<version>-macos.dmg`
 
+Windows and macOS builds are published, but they are still considered lightly tested compared to the Linux workflow.
+
 ## Overview
 
-GreyOK Twitch Co-Host is a desktop command center for:
+GreyOK Twitch Co-Host is a desktop control surface for:
 
-- local chat and mic-driven cohost sessions
-- Twitch OAuth, bot auth, streamer auth, and chat connection
-- curated Ollama cloud model selection
-- character presets, voice pairing, and avatar rig tuning
-- runtime controls for pacing, voice replies, and diagnostics
-- a floating avatar popup for stream overlays
+- local co-host chat sessions
+- Twitch bot + streamer OAuth and chat connection
+- curated Ollama model selection
+- direct voice selection with live tone sliders
+- TTS replies and mic-driven interaction
+- avatar stage and face rig controls
+- runtime monitoring for STT, TTS, model, and Twitch state
 
-## Quick Startup
+## Current UI
+
+The current app uses a neutral grey glass-style desktop UI.
+
+Main sections:
+
+- `Chat`
+- `Twitch`
+- `Models`
+- `Voice`
+- `Settings`
+
+## Quick Start
+
+### Run From Source
+
+```bash
+npm install
+npm run tauri dev
+```
 
 ### Run A Release Build
 
@@ -35,66 +57,84 @@ chmod +x greyok-cohost-<version>-linux-x64.AppImage
 ./greyok-cohost-<version>-linux-x64.AppImage
 ```
 
-### Run From Source
+## First Setup
 
-```bash
-npm install
-npm run tauri dev
-```
+### Model Setup
 
-### First 5 Minutes
-
-1. Open `Models Folder`.
+1. Open `Models`.
 2. Paste your Ollama API key.
 3. Click `Check Cloud Models`.
-4. Pick a curated model.
+4. Pick a model from the curated list.
 5. Click `Enable Cloud-Only Mode`.
-6. Return to `Chat Folder` and send a prompt or click `Mic On`.
 
-### Optional Twitch Setup
+### Twitch Setup
 
-Open `Twitch Folder` and save your Twitch app details first.
+1. Open `Twitch`.
+2. Save your Twitch app `Client ID`.
+3. Use the default redirect URL unless you have a reason to change it:
+   `http://127.0.0.1:37219/callback`
+4. Connect in this order:
+   - `Connect Bot`
+   - `Connect Streamer`
+   - `Connect Chat`
 
-- Redirect URL default: `http://127.0.0.1:37219/callback`
-- Connect in this order: `Connect Bot`, `Connect Streamer`, `Connect Chat`
-- Keep Bot and Streamer on separate Twitch accounts
+Use separate Twitch accounts for the bot and the streamer.
 
-### Optional Character And Voice Setup
+### Voice Setup
 
-- `Character Folder` lets you pick a preset, tune warmth/humor/flirt/edge/energy/story, and rig the avatar stage.
-- `Settings Folder` lets you toggle voice replies, keep-talking mode, bot posting, auto comments, volume, and runtime diagnostics.
+Open `Voice`.
 
-## Main Folders
+- pick one of the built-in voices
+- adjust:
+  - `Warmth`
+  - `Humor`
+  - `Flirt`
+  - `Edge`
+  - `Energy`
+  - `Story`
+- optional: use `Extra direction` to push the model harder in a specific direction
 
-### Chat Folder
+These controls write directly into the live model prompt. The app is no longer built around long preset personality lists.
 
-- combined feed, local IRC feed, and timeline feed
-- `Send To AI`, `Send To Twitch`, and `Mic On`
-- live interim and final speech status badges
+## Main Tabs
 
-### Twitch Folder
+### Chat
 
-- Twitch Client ID and redirect URL
-- bot and streamer OAuth flows
-- direct chat connect/disconnect controls
+- combined feed
+- local IRC feed
+- timeline feed
+- `Send To AI`
+- `Send To Twitch`
+- `Mic On`
 
-### Models Folder
+### Twitch
 
-- short curated model catalog
-- conversational and uncensored picks
-- cloud-only enable flow without dumping the full provider catalog
+- Twitch OAuth configuration
+- bot account auth
+- streamer account auth
+- chat connect/disconnect
 
-### Character Folder
+### Models
 
-- preset-driven personality selection
-- explicit voice pairing
-- embedded avatar stage with popup support
+- curated conversational and uncensored model list
+- Ollama cloud account check
+- cloud-only mode toggle path
 
-### Settings Folder
+### Voice
 
-- voice replies, keep talking, bot posting, and auto comments
-- chat pacing and voice volume sliders
-- voice runtime diagnostics in the main control surface
+- voice selector
+- direct tone sliders
+- avatar stage
+- rig controls
+
+### Settings
+
+- voice replies
+- keep talking mode
+- bot posting control
+- auto comments
+- voice volume
+- diagnostics
 
 ## Development
 
@@ -110,27 +150,59 @@ Run the desktop app:
 npm run tauri dev
 ```
 
-Verify the frontend and Rust backend:
+Validate:
 
 ```bash
-npm run lint
+npm run check
+npm run test:harness
 npm run build
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-Refresh the single README screenshot against a running local frontend:
+Refresh the README screenshot:
 
 ```bash
 npm run docs:capture
 ```
 
-The capture script reads `DOCS_CAPTURE_URL` when you want to target a non-default local URL.
+The capture script checks these local URLs in order:
 
-## Release Workflow
+- `http://127.0.0.1:1420/`
+- `http://127.0.0.1:4180/`
+- `http://127.0.0.1:5173/`
 
-- Version is currently `0.3.0`.
-- GitHub Actions builds release artifacts on `v*` tags.
-- Tagging `v0.3.0` publishes draft releases for Linux, Windows, and macOS.
+## Roadmap
+
+### Near Term
+
+- stabilize browser speech vs local fallback selection
+- tighten TTS reliability while the mic is active
+- improve mouth, eye, and glow rig feedback
+- keep voice switching and persistence predictable across restarts
+
+### Next System Pass
+
+- reduce reliance on legacy `character` naming in config and commands
+- continue simplifying the app around `voice + tone + model`
+- improve diagnostics so browser STT failures report exact causes
+
+### Future Capture / Vision Work
+
+- browser-companion capture path instead of forcing everything through the Linux Tauri webview
+- optional tab audio / browser media capture
+- vision-capable model support for contextual video commentary
+- YouTube / live-video co-host mode
+
+Extension-based capture is still under consideration, but it is not committed as the immediate next step.
+
+## Free Cloud Direction
+
+The most realistic free cloud-ish path for speech remains browser speech in a normal Chromium session.
+
+For the future capture roadmap, the current plan is:
+
+- prefer a normal browser session for capture/speech if possible
+- avoid locking the project into an extension-first design until the simpler bridge path is proven
 
 ## Social Links
 

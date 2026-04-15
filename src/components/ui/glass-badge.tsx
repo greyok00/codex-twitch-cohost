@@ -11,7 +11,7 @@ const glassBadgeVariants = cva(
     variants: {
       variant: {
         default: "bg-white/15 border-white/25 text-white",
-        primary: cn("bg-linear-to-r from-cyan-500/30 to-blue-500/30", "border-cyan-400/30 text-cyan-100"),
+        primary: cn("bg-linear-to-r from-zinc-500/28 to-neutral-500/28", "border-zinc-300/30 text-zinc-100"),
         success: cn("bg-emerald-500/20 border-emerald-400/30 text-emerald-100"),
         warning: cn("bg-amber-500/20 border-amber-400/30 text-amber-100"),
         destructive: cn("bg-red-500/20 border-red-400/30 text-red-100"),

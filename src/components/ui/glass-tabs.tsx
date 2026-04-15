@@ -11,31 +11,15 @@ const GlassTabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
 >(({ className, ...props }, ref) => (
-  <div className="relative">
-    <motion.div
-      className="absolute -inset-1 rounded-2xl bg-linear-to-r from-cyan-500/20 via-blue-500/20 to-purple-500/20 blur-lg"
-      animate={{
-        opacity: [0.4, 0.6, 0.4],
-      }}
-      transition={{
-        duration: 3,
-        repeat: Number.POSITIVE_INFINITY,
-        ease: "easeInOut",
-      }}
-      aria-hidden="true"
-    />
-    <TabsPrimitive.List
-      ref={ref}
-      className={cn(
-        "relative inline-flex h-12 items-center justify-center gap-1 rounded-xl p-1",
-        "bg-white/10 backdrop-blur-xl border border-white/20",
-        "shadow-[0_4px_16px_rgba(0,0,0,0.2)]",
-        className,
-      )}
-      aria-label="Tab navigation"
-      {...props}
-    />
-  </div>
+  <TabsPrimitive.List
+    ref={ref}
+    className={cn(
+      "relative inline-flex h-12 items-center justify-center gap-1 rounded-xl p-1",
+      className,
+    )}
+    aria-label="Tab navigation"
+    {...props}
+  />
 ))
 GlassTabsList.displayName = TabsPrimitive.List.displayName
 

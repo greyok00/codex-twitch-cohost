@@ -71,8 +71,8 @@ export function AvatarRuntime({ avatarSrc, rig, detached = false, onRigChange, o
     () => ({
       ['--mouth-x' as string]: `${rig.mouthX}px`,
       ['--mouth-y' as string]: `${rig.mouthY}px`,
-      ['--mouth-width' as string]: `${Math.max(42, rig.mouthWidth * 2)}px`,
-      ['--mouth-open' as string]: `${clamp(rig.mouthOpen + (speaking ? 16 : 0), 0, 100)}`,
+      ['--mouth-width' as string]: `${clamp(rig.mouthWidth, 6, 40)}px`,
+      ['--mouth-open' as string]: `${clamp(rig.mouthOpen + (speaking ? 16 : 0), 0, 100)}px`,
       ['--mouth-softness' as string]: `${rig.mouthSoftness}`,
       ['--mouth-smile' as string]: `${rig.mouthSmile}px`,
       ['--mouth-tilt' as string]: `${rig.mouthTilt}deg`,
@@ -140,7 +140,7 @@ export function AvatarRuntime({ avatarSrc, rig, detached = false, onRigChange, o
     <div className="avatar-shell embedded">
       <div className="avatar-shell-header">
         <div>
-          <div className="section-title">Character Stage</div>
+          <div className="section-title">Avatar Stage</div>
           <div className="panel-copy small-copy">
             Recommended portrait for this stage: 900×1400 minimum, 1200×1800 ideal. Keep the full head centered with extra forehead and chin room.
           </div>
@@ -180,7 +180,7 @@ export function AvatarRuntime({ avatarSrc, rig, detached = false, onRigChange, o
             <div className="avatar-rig-grid-react">
               <RigSlider label="Mouth X" value={rig.mouthX} min={-80} max={80} onChange={(value) => onRigChange?.({ mouthX: value })} />
               <RigSlider label="Mouth Y" value={rig.mouthY} min={-70} max={140} onChange={(value) => onRigChange?.({ mouthY: value })} />
-              <RigSlider label="Mouth Width" value={rig.mouthWidth} min={16} max={46} onChange={(value) => onRigChange?.({ mouthWidth: value })} />
+              <RigSlider label="Mouth Width" value={rig.mouthWidth} min={6} max={40} onChange={(value) => onRigChange?.({ mouthWidth: value })} />
               <RigSlider label="Mouth Open" value={rig.mouthOpen} min={0} max={100} onChange={(value) => onRigChange?.({ mouthOpen: value })} />
               <RigSlider label="Mouth Smile" value={rig.mouthSmile} min={-40} max={40} onChange={(value) => onRigChange?.({ mouthSmile: value })} />
               <RigSlider label="Mouth Tilt" value={rig.mouthTilt} min={-25} max={25} onChange={(value) => onRigChange?.({ mouthTilt: value })} />

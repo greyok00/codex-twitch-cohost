@@ -15,7 +15,7 @@
         "title": "greyok-cohost",
         "width": 1440,
         "height": 900,
-        "maximized": true,
+        "maximized": false,
         "resizable": true,
         "fullscreen": false
       }

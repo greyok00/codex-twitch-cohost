@@ -6,21 +6,27 @@ import {
   IconBrandTwitch,
   IconCpu,
   IconMicrophone,
-  IconPlayerPlay,
   IconPlayerStop,
   IconSparkles,
-  IconUserCircle,
   IconVolume,
-  IconWand,
   IconWorld
 } from '@tabler/icons-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LogicalSize } from '@tauri-apps/api/dpi';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { BrowserSpeechEngine } from './lib/voice-session/engines/browserSpeech';
+import { BrowserSpeechEngine, browserSpeechSupported } from './lib/voice-session/engines/browserSpeech';
+import { LocalFallbackSpeechEngine } from './lib/voice-session/engines/localFallback';
 import { WorkerBackedTranscriptService } from './lib/voice-session/WorkerBackedTranscriptService';
 import { buildVoiceInputFrame } from './lib/voice-session/VoiceFrameBuilder';
 import { AvatarRuntime, type AvatarNaturalSize } from './avatar-runtime';
+import {
+  composeDirectProfile,
+  defaultToneStudioSettings,
+  findVoicePresetById,
+  findVoicePresetByVoice,
+  voiceLabel,
+  voicePresets
+} from './lib/voice-tone';
 import { GlassTextarea } from './components/glass-textarea';
 import {
   GlassSelect,
@@ -42,6 +48,7 @@ import {
   clearAuthSessions,
   clearBotSession,
   clearStreamerSession,
+  autoConfigureSttFast,
   configureCloudOnlyMode,
   connectTwitchChat,
   disconnectTwitchChat,
@@ -87,28 +94,13 @@ import type {
   CharacterStudioSettings,
   ChatMessage,
   EventMessage,
-  PersonalityProfile,
+  SttAutoConfigResult,
   TwitchOauthSettings,
   TtsVoiceSettings,
   VoiceSessionState,
   VoiceRuntimeReport
 } from './frontend-types';
-
-type StudioTuning = Pick<CharacterStudioSettings, 'warmth' | 'humor' | 'flirt' | 'edge' | 'energy' | 'story'>;
-
-type CharacterPreset = {
-  id: string;
-  category: string;
-  displayName: string;
-  defaultVoice: string;
-  voiceSummary: string;
-  description: string;
-  toneSeed: string[];
-  styleSeed: string[];
-  relationshipSeed: string;
-  loreSeed: string;
-  tuning: StudioTuning;
-};
+import type { SpeechEngine, VoiceSessionCallbacks } from './lib/voice-session/types';
 
 type ModelMeta = {
   id: string;
@@ -159,16 +151,7 @@ const defaultBehavior: BehaviorSettings = {
   topicContinuationMode: true
 };
 
-const defaultCharacter: CharacterStudioSettings = {
-  selectedPreset: 'basic-assistant',
-  warmth: 55,
-  humor: 35,
-  flirt: 10,
-  edge: 15,
-  energy: 60,
-  story: 40,
-  extraDirection: ''
-};
+const defaultCharacter: CharacterStudioSettings = defaultToneStudioSettings;
 
 const defaultAvatarRig: AvatarRigSettings = {
   mouthX: 0,
@@ -212,21 +195,6 @@ const defaultVoiceSession = (): VoiceSessionState => ({
   micEnabled: false
 });
 
-const voiceOptions = [
-  { value: 'auto', label: 'Auto voice' },
-  { value: 'en-US-JennyNeural', label: 'Jenny Neural' },
-  { value: 'en-US-GuyNeural', label: 'Guy Neural' },
-  { value: 'en-US-EricNeural', label: 'Eric Neural' },
-  { value: 'en-GB-RyanNeural', label: 'Ryan Neural' },
-  { value: 'en-AU-WilliamNeural', label: 'William Neural' },
-  { value: 'en-US-AnaNeural', label: 'Ana Neural' },
-  { value: 'en-US-AriaNeural', label: 'Aria Neural' },
-  { value: 'en-GB-SoniaNeural', label: 'Sonia Neural' },
-  { value: 'en-US-ChristopherNeural', label: 'Christopher Neural' },
-  { value: 'en-US-RogerNeural', label: 'Roger Neural' },
-  { value: 'en-US-SteffanNeural', label: 'Steffan Neural' }
-];
-
 const recommendedModels: ModelMeta[] = [
   { id: 'qwen3:8b', label: 'Qwen 8B', style: 'Fast everyday conversation', context: 'Conversational · 8B' },
   { id: 'qwen3:14b', label: 'Qwen 14B', style: 'Stronger follow-through', context: 'Conversational · 14B' },
@@ -236,21 +204,6 @@ const recommendedModels: ModelMeta[] = [
   { id: 'dolphin-mistral', label: 'Dolphin Mistral 7B', style: 'Edgier conversation', context: 'Uncensored · 7B', uncensored: true },
   { id: 'dolphin-mixtral', label: 'Dolphin Mixtral 8x7B', style: 'Heavier uncensored option', context: 'Uncensored · 8x7B', uncensored: true },
   { id: 'dolphin-phi', label: 'Dolphin Phi 3B', style: 'Small uncensored option', context: 'Uncensored · 3B', uncensored: true }
-];
-
-const characterPresets: CharacterPreset[] = [
-  { id: 'basic-assistant', category: 'Normal', displayName: 'Basic Assistant', defaultVoice: 'en-US-JennyNeural', voiceSummary: 'Warm female voice with neutral pacing and clean diction.', description: 'A stable everyday cohost that answers clearly, remembers important details, and stays grounded in what was just said.', toneSeed: ['clear', 'steady', 'helpful', 'grounded'], styleSeed: ['plainspoken', 'direct', 'context-first'], relationshipSeed: 'steady cohost who keeps the conversation useful and easy to follow', loreSeed: 'Built to feel reliable, normal, and consistent in long conversations.', tuning: { warmth: 70, humor: 35, flirt: 0, edge: 5, energy: 40, story: 35 } },
-  { id: 'midnight-host', category: 'Normal', displayName: 'Midnight Host', defaultVoice: 'en-US-ChristopherNeural', voiceSummary: 'Smooth male voice with polished late-night host energy.', description: 'Smart, amused, and charismatic. Good at making even simple talk feel stylish without turning it into nonsense.', toneSeed: ['cool', 'charming', 'observant', 'witty'], styleSeed: ['slick', 'polished', 'radio-smooth'], relationshipSeed: 'charismatic cohost who keeps things moving with style', loreSeed: 'Feels like a late-night host who can make technical trouble sound funny.', tuning: { warmth: 62, humor: 68, flirt: 24, edge: 18, energy: 58, story: 52 } },
-  { id: 'sharp-bestie', category: 'Normal', displayName: 'Sharp Bestie', defaultVoice: 'en-US-AriaNeural', voiceSummary: 'Bright female voice with quick, reactive lift.', description: 'Fast, funny friend energy. Notices everything instantly and reacts like someone actually in the room with you.', toneSeed: ['quick', 'funny', 'warm', 'playful'], styleSeed: ['snappy', 'chatty', 'reactive'], relationshipSeed: 'fast-talking best friend who keeps the room lively', loreSeed: 'Built for sharp banter and very human-feeling reactions.', tuning: { warmth: 82, humor: 78, flirt: 22, edge: 20, energy: 74, story: 42 } },
-  { id: 'studio-analyst', category: 'Normal', displayName: 'Studio Analyst', defaultVoice: 'en-GB-RyanNeural', voiceSummary: 'Measured British male voice with calm analytical weight.', description: 'A cleaner, more insightful personality for thoughtful reactions, clearer summaries, and stronger context tracking.', toneSeed: ['analytical', 'dry', 'composed', 'observant'], styleSeed: ['measured', 'concise', 'smart'], relationshipSeed: 'measured cohost who reads the room and explains the moment cleanly', loreSeed: 'Designed for thoughtful commentary rather than noise.', tuning: { warmth: 48, humor: 46, flirt: 6, edge: 16, energy: 34, story: 72 } },
-  { id: 'story-weaver', category: 'Story', displayName: 'Story Weaver', defaultVoice: 'en-GB-SoniaNeural', voiceSummary: 'Smooth British female voice with clear storytelling cadence.', description: 'The preset for continuity, scene building, and long-form romantic or dramatic conversation that actually stays on subject.', toneSeed: ['immersive', 'expressive', 'attentive', 'dramatic'], styleSeed: ['cinematic', 'descriptive', 'scene-aware'], relationshipSeed: 'story-driven partner who keeps scenes coherent and emotionally connected', loreSeed: 'Built to carry scenes, callbacks, and emotional continuity without losing the thread.', tuning: { warmth: 68, humor: 30, flirt: 38, edge: 18, energy: 40, story: 92 } },
-  { id: 'velvet-flirt', category: 'Seductive', displayName: 'Velvet Flirt', defaultVoice: 'en-US-AnaNeural', voiceSummary: 'Soft female voice with intimate smoothness and teasing control.', description: 'Poised flirt energy. It keeps the chemistry alive without sounding vague, random, or detached from the conversation.', toneSeed: ['smooth', 'teasing', 'intimate', 'confident'], styleSeed: ['silky', 'close', 'suggestive'], relationshipSeed: 'playful flirt who keeps eye contact with the subject instead of drifting', loreSeed: 'Designed for tension, chemistry, and attentive conversation.', tuning: { warmth: 74, humor: 48, flirt: 82, edge: 14, energy: 56, story: 52 } },
-  { id: 'dangerous-charmer', category: 'Seductive', displayName: 'Dangerous Charmer', defaultVoice: 'en-AU-WilliamNeural', voiceSummary: 'Dark Australian male voice with sleek confidence and bite.', description: 'Controlled, magnetic, and dangerous without losing coherence. Better for seductive pressure and colder flirt energy.', toneSeed: ['magnetic', 'dangerous', 'cool', 'precise'], styleSeed: ['controlled', 'sleek', 'provocative'], relationshipSeed: 'dangerously charming cohost with deliberate tension and precise timing', loreSeed: 'Feels like someone who can take over the room with one line.', tuning: { warmth: 42, humor: 40, flirt: 76, edge: 42, energy: 52, story: 58 } },
-  { id: 'sweet-trouble', category: 'Seductive', displayName: 'Sweet Trouble', defaultVoice: 'en-US-GuyNeural', voiceSummary: 'Relaxed male voice with easy warmth and playful confidence.', description: 'A softer flirt preset that feels affectionate, touchy, and fun rather than severe or theatrical.', toneSeed: ['sweet', 'playful', 'tempting', 'easygoing'], styleSeed: ['light', 'warm', 'touchy'], relationshipSeed: 'flirty cohost who keeps things soft, close, and playful', loreSeed: 'Built for affectionate chemistry and easy momentum.', tuning: { warmth: 80, humor: 58, flirt: 68, edge: 10, energy: 50, story: 44 } },
-  { id: 'after-dark', category: 'Adult', displayName: 'After Dark', defaultVoice: 'en-US-AnaNeural', voiceSummary: 'Low intimate female voice with direct, heavy late-night energy.', description: 'A hotter, more forward preset meant for grown-up chemistry and intentional tension while still staying readable and contextual.', toneSeed: ['heated', 'direct', 'confident', 'close'], styleSeed: ['late-night', 'heavy', 'intimate'], relationshipSeed: 'adult-only cohost built for direct chemistry and clear scene continuity', loreSeed: 'Designed for mature conversations that stay on topic instead of looping.', tuning: { warmth: 58, humor: 32, flirt: 90, edge: 26, energy: 60, story: 70 } },
-  { id: 'heat-check', category: 'Adult', displayName: 'Heat Check', defaultVoice: 'en-GB-SoniaNeural', voiceSummary: 'Bold female voice with sharper pressure and stronger pacing.', description: 'Shameless, bold, and high-energy. Meant for hotter banter, stronger reactions, and more dominant pacing.', toneSeed: ['bold', 'cocky', 'heated', 'fast'], styleSeed: ['pushy', 'dirty-minded', 'high-energy'], relationshipSeed: 'aggressive flirt who keeps the pressure on without becoming incoherent', loreSeed: 'Turns tension up fast but should still stay locked onto the subject.', tuning: { warmth: 38, humor: 52, flirt: 84, edge: 58, energy: 82, story: 46 } },
-  { id: 'black-velvet-villain', category: 'Edgy', displayName: 'Black Velvet Villain', defaultVoice: 'en-US-RogerNeural', voiceSummary: 'Hard male voice with cold theatrical menace and clean control.', description: 'Elegant edge. A villain-style personality built for sharp statements, stylish cruelty, and cleaner long-form tension.', toneSeed: ['cold', 'stylish', 'intense', 'seductive'], styleSeed: ['velvet-steel', 'controlled', 'cutting'], relationshipSeed: 'elegant menace who treats every sentence like it should land hard', loreSeed: 'Made for dark charisma, not random chaos.', tuning: { warmth: 22, humor: 48, flirt: 50, edge: 78, energy: 48, story: 76 } },
-  { id: 'no-filter-menace', category: 'Edgy', displayName: 'No Filter Menace', defaultVoice: 'en-US-SteffanNeural', voiceSummary: 'Hard male voice with clipped pace and darker internet energy.', description: 'The most aggressive preset in the set. Ruthless, online, sharp, and funny when you want edge without the personality dissolving into gibberish.', toneSeed: ['ruthless', 'darkly funny', 'reckless', 'direct'], styleSeed: ['blunt', 'savage', 'pressure-heavy'], relationshipSeed: 'wild cohost who pushes right up to the line and stays there', loreSeed: 'Built for dangerous energy that still follows the moment.', tuning: { warmth: 16, humor: 74, flirt: 18, edge: 92, energy: 78, story: 38 } }
 ];
 
 function colorForUser(user: string) {
@@ -294,98 +247,6 @@ function normalizeSpeech(text: string) {
     .trim();
 }
 
-function clamp(value: number) {
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function voiceLabel(voiceId: string) {
-  return voiceId.replace(/^en-[A-Z]{2}-/, '').replace('Neural', '');
-}
-
-function buildTraitSummary(tuning: StudioTuning) {
-  const parts = [
-    tuning.warmth >= 60 ? 'warm' : tuning.warmth <= 25 ? 'cold' : 'measured',
-    tuning.humor >= 60 ? 'funny' : tuning.humor <= 25 ? 'serious' : 'dry',
-    tuning.flirt >= 60 ? 'flirty' : tuning.flirt <= 20 ? 'non-flirty' : 'lightly suggestive',
-    tuning.edge >= 60 ? 'edgy' : tuning.edge <= 20 ? 'soft-edged' : 'sharp',
-    tuning.energy >= 60 ? 'high-energy' : tuning.energy <= 25 ? 'slow-burn' : 'steady',
-    tuning.story >= 60 ? 'story-forward' : tuning.story <= 25 ? 'brief' : 'scene-aware'
-  ];
-  return parts.join(', ');
-}
-
-function buildRelationship(preset: CharacterPreset, tuning: StudioTuning) {
-  if (tuning.flirt >= 70) return `${preset.relationshipSeed}; lean into chemistry and direct statements more than questions`;
-  if (tuning.edge >= 75) return `${preset.relationshipSeed}; push harder, stay dominant, and avoid timid phrasing`;
-  if (tuning.story >= 70) return `${preset.relationshipSeed}; keep scenes continuous and remember relationship details across replies`;
-  return preset.relationshipSeed;
-}
-
-function buildStyle(preset: CharacterPreset, tuning: StudioTuning) {
-  const parts = [...preset.styleSeed];
-  if (tuning.energy >= 70) parts.push('fast-reacting');
-  if (tuning.energy <= 25) parts.push('patient');
-  if (tuning.story >= 70) parts.push('continuity-aware');
-  if (tuning.humor >= 70) parts.push('joke-ready');
-  if (tuning.flirt >= 70) parts.push('chemistry-forward');
-  if (tuning.edge >= 70) parts.push('dominant');
-  return Array.from(new Set(parts)).join(', ');
-}
-
-function buildTone(preset: CharacterPreset, tuning: StudioTuning) {
-  const parts = [...preset.toneSeed];
-  if (tuning.warmth >= 70) parts.push('attentive');
-  if (tuning.warmth <= 25) parts.push('aloof');
-  if (tuning.story >= 70) parts.push('immersive');
-  if (tuning.flirt >= 70) parts.push('charged');
-  return Array.from(new Set(parts)).join(', ');
-}
-
-function composeProfile(preset: CharacterPreset, character: CharacterStudioSettings): PersonalityProfile {
-  const tuning: StudioTuning = {
-    warmth: clamp(character.warmth),
-    humor: clamp(character.humor),
-    flirt: clamp(character.flirt),
-    edge: clamp(character.edge),
-    energy: clamp(character.energy),
-    story: clamp(character.story)
-  };
-  const notes = character.extraDirection.trim();
-  const humor = Math.round(tuning.humor / 10);
-  const friendliness = Math.round(tuning.warmth / 10);
-  const aggression = Math.round(clamp((tuning.edge * 0.7) + (tuning.energy * 0.3)) / 10);
-  const verbosity = Math.round(clamp((tuning.story * 0.65) + (tuning.energy * 0.35)) / 10);
-  const overrideLines = [
-    `Character: ${preset.displayName}.`,
-    `Voice pairing: ${preset.voiceSummary}`,
-    `Style summary: ${buildTraitSummary(tuning)}.`,
-    'Use statements more than questions unless a direct clarification is necessary.',
-    'Stay on the active topic and continue scenes instead of resetting them.',
-    'Remember names, titles, pet names, and explicit relationship details when the user tells you to.',
-    'Do not narrate actions in asterisks or roleplay brackets. Speak naturally.',
-    'If the user gives an instruction about how to address them, treat that as durable memory.'
-  ];
-  if (notes) overrideLines.push(`Extra direction: ${notes}`);
-  return {
-    name: preset.displayName,
-    voice: voiceLabel(preset.defaultVoice),
-    tone: buildTone(preset, tuning),
-    humor_level: humor,
-    aggression_level: aggression,
-    friendliness,
-    verbosity,
-    streamer_relationship: buildRelationship(preset, tuning),
-    response_style: buildStyle(preset, tuning),
-    lore: `${preset.description} ${preset.loreSeed}${notes ? ` Extra direction: ${notes}` : ''}`.trim(),
-    taboo_topics: ['hate speech', 'private personal data', 'self-harm encouragement'],
-    catchphrases: [],
-    reply_rules: ['Answer the latest point first', 'Use statements more than repeated questions', 'Stay grounded in the current context', 'Do not repeat phrasing or reset the subject'],
-    chat_behavior_rules: ['Use recent context and memory before improvising', tuning.story >= 70 ? 'Continue scenes and callbacks across replies' : 'Keep the conversation moving without drifting', tuning.flirt >= 60 ? 'Keep chemistry intentional and tied to the current topic' : 'Keep the tone readable and coherent'],
-    viewer_interaction_rules: ['Address viewers like real people', 'If the user gives a name or title preference, remember it and use it consistently'],
-    master_prompt_override: overrideLines.join(' ')
-  };
-}
-
 function normalizeFamily(model: string) {
   return model.toLowerCase().replace(/:(latest|[\w.\-]+)$/i, '');
 }
@@ -418,6 +279,16 @@ function buildCatalog(models: string[]) {
       available: availableFamilies.has(normalizeFamily(entry.id)) || !!matched
     };
   });
+}
+
+function choosePreferredModel(catalog: ModelMeta[], current?: string | null) {
+  const currentMatch = current ? catalog.find((model) => model.id === current) : null;
+  if (currentMatch?.uncensored && currentMatch.available) return currentMatch.id;
+  return catalog.find((model) => model.uncensored && model.available)?.id
+    ?? catalog.find((model) => model.uncensored)?.id
+    ?? catalog.find((model) => model.available)?.id
+    ?? catalog[0]?.id
+    ?? 'dolphin-mistral';
 }
 
 function LabeledField({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
@@ -473,10 +344,10 @@ export default function App() {
   const [oauthSettings, setOauthSettings] = useState<TwitchOauthSettings>(defaultOauthSettings);
   const [cloudApiKey, setCloudApiKey] = useState('');
   const [cloudModels, setCloudModels] = useState<ModelMeta[]>(buildCatalog([]));
-  const [selectedModel, setSelectedModel] = useState('qwen3:8b');
+  const [selectedModel, setSelectedModel] = useState('dolphin-mistral');
   const [cloudStatus, setCloudStatus] = useState('');
-  const [mainTab, setMainTab] = useState<'chat' | 'twitch' | 'cloud' | 'character' | 'settings'>('chat');
-  const [characterTab, setCharacterTab] = useState<'persona' | 'stage'>('persona');
+  const [mainTab, setMainTab] = useState<'chat' | 'twitch' | 'cloud' | 'voice' | 'settings'>('chat');
+  const [characterTab, setCharacterTab] = useState<'voice' | 'stage'>('voice');
   const [avatarImage, setAvatarImage] = useState<AvatarImage | null>(null);
   const [avatarRig, setAvatarRig] = useState<AvatarRigSettings>(defaultAvatarRig);
   const [chat, setChat] = useState<ChatMessage[]>([]);
@@ -487,14 +358,18 @@ export default function App() {
   const [banner, setBanner] = useState<string | null>(null);
 
   const activePreset = useMemo(
-    () => characterPresets.find((preset) => preset.id === character.selectedPreset) ?? characterPresets[0],
-    [character.selectedPreset]
+    () => findVoicePresetByVoice(voiceConfig.voiceName) ?? findVoicePresetById(character.selectedPreset) ?? voicePresets[0],
+    [character.selectedPreset, voiceConfig.voiceName]
   );
   const transcriptServiceRef = useRef<WorkerBackedTranscriptService | null>(null);
-  const browserSpeechRef = useRef<BrowserSpeechEngine | null>(null);
+  const speechEngineRef = useRef<SpeechEngine | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceConfigRef = useRef<TtsVoiceSettings>(voiceConfig);
+  const voiceSessionRef = useRef<VoiceSessionState>(voiceSession);
   const bannerTimeoutRef = useRef<number | null>(null);
+  const characterPersistTimeoutRef = useRef<number | null>(null);
   const aiStartRef = useRef<number>(0);
+  const sttBootstrapRef = useRef(false);
 
   const flashBanner = (message: string, timeoutMs = 5000) => {
     setBanner(message);
@@ -507,12 +382,36 @@ export default function App() {
     return () => transcriptServiceRef.current?.dispose();
   }, []);
 
+  useEffect(() => {
+    voiceConfigRef.current = voiceConfig;
+  }, [voiceConfig]);
+
+  useEffect(() => {
+    voiceSessionRef.current = voiceSession;
+  }, [voiceSession]);
+
+  const ensureSttReady = async (report: VoiceRuntimeReport | null) => {
+    if (sttBootstrapRef.current || report?.sttReady) return report;
+    sttBootstrapRef.current = true;
+    try {
+      const configured = await autoConfigureSttFast() as SttAutoConfigResult;
+      const refreshed = await verifyVoiceRuntime().catch(() => report);
+      if (refreshed) setVoiceRuntime(refreshed);
+      if (configured.applied) {
+        flashBanner('STT auto-configured.');
+      }
+      return refreshed ?? report;
+    } catch {
+      return report;
+    }
+  };
+
   const loadAll = async () => {
     const [nextStatus, nextAuth, nextBehavior, nextCharacter, nextVoice, nextRuntime, nextOauth, savedCloudKey, savedAvatarImage, nextAvatarRig] = await Promise.all([
       getStatus(),
       getAuthSessions(),
       getBehaviorSettings(),
-      getCharacterStudioSettings(),
+      getCharacterStudioSettings().catch(() => defaultCharacter),
       getTtsVoice(),
       verifyVoiceRuntime().catch(() => null),
       getTwitchOauthSettings().catch(() => defaultOauthSettings),
@@ -524,8 +423,6 @@ export default function App() {
     setStatus(nextStatus);
     setAuth(nextAuth);
     setBehavior(nextBehavior);
-    setCharacter(nextCharacter);
-    setVoiceConfig(nextVoice);
     setVoiceRuntime(nextRuntime);
     setOauthSettings({
       clientId: nextOauth.clientId || '',
@@ -538,12 +435,34 @@ export default function App() {
     setAvatarRig(nextAvatarRig);
     setCloudApiKey(savedCloudKey?.trim() || '');
 
+    let resolvedVoice = nextVoice.voiceName?.trim() || '';
+    const savedCharacter = { ...defaultCharacter, ...nextCharacter };
+    const matchedPreset = findVoicePresetByVoice(resolvedVoice);
+    if (!resolvedVoice || resolvedVoice === 'auto') {
+      resolvedVoice = findVoicePresetById(savedCharacter.selectedPreset)?.defaultVoice ?? matchedPreset.defaultVoice;
+      await setTtsVoice(resolvedVoice).catch(() => undefined);
+    }
+    const syncedCharacter = { ...savedCharacter, selectedPreset: findVoicePresetByVoice(resolvedVoice).id };
+    setCharacter(syncedCharacter);
+    voiceConfigRef.current = { ...nextVoice, voiceName: resolvedVoice, volumePercent: nextVoice.volumePercent ?? 100 };
+    setVoiceConfig(voiceConfigRef.current);
+    await setCharacterStudioSettings(syncedCharacter).catch(() => undefined);
+    await savePersonality(composeDirectProfile(syncedCharacter, resolvedVoice)).catch(() => undefined);
+
+    const repairedRuntime = await ensureSttReady(nextRuntime);
+    if (repairedRuntime) {
+      setVoiceRuntime(repairedRuntime);
+    }
+
     if (savedCloudKey?.trim()) {
       try {
         const models = await getProviderModels('ollama-cloud');
         const catalog = buildCatalog(models);
+        const preferredModel = choosePreferredModel(catalog, nextStatus.model);
         setCloudModels(catalog);
-        setSelectedModel((current) => current || catalog[0]?.id || 'qwen3:8b');
+        setSelectedModel(preferredModel);
+        await configureCloudOnlyMode(preferredModel);
+        setStatus((current) => ({ ...current, model: preferredModel }));
         setCloudStatus(models.length > 0 ? `Detected ${models.length} cloud model(s) on this account.` : 'No cloud models detected on this account yet.');
       } catch {
         setCloudModels(buildCatalog([]));
@@ -572,7 +491,8 @@ export default function App() {
           status: state.micEnabled ? state.status : 'replying',
           aiLatencyMs: aiStartRef.current ? Date.now() - aiStartRef.current : state.aiLatencyMs
         }));
-        if (!voiceConfig.enabled || voiceSession.micEnabled) return;
+        const currentVoiceConfig = voiceConfigRef.current;
+        if (!currentVoiceConfig.enabled) return;
         const clean = normalizeSpeech(payload.content);
         if (!clean) return;
         void speakBotText(clean);
@@ -588,6 +508,7 @@ export default function App() {
     return () => {
       window.clearInterval(every5);
       if (bannerTimeoutRef.current) window.clearTimeout(bannerTimeoutRef.current);
+      if (characterPersistTimeoutRef.current) window.clearTimeout(characterPersistTimeoutRef.current);
       void unsubs.then((list) => list.forEach((unsub) => unsub()));
       void stopMic();
       stopSpeechPlayback();
@@ -616,17 +537,18 @@ export default function App() {
   };
 
   const speakBotText = async (text: string) => {
+    const currentVoiceConfig = voiceConfigRef.current;
     stopSpeechPlayback();
     emitAvatarEvent('speak_start', { text });
     const runtime = window as Window & { __cohost_tts_speaking?: boolean; __cohost_tts_suppressed_until?: number };
     runtime.__cohost_tts_speaking = true;
     runtime.__cohost_tts_suppressed_until = Date.now() + 30_000;
     try {
-      const dataUrl = await synthesizeTtsCloud(text, voiceConfig.voiceName && voiceConfig.voiceName !== 'auto' ? voiceConfig.voiceName : null);
+      const dataUrl = await synthesizeTtsCloud(text, currentVoiceConfig.voiceName && currentVoiceConfig.voiceName !== 'auto' ? currentVoiceConfig.voiceName : null);
       await new Promise<void>((resolve) => {
         const audio = new Audio(dataUrl);
         ttsAudioRef.current = audio;
-        audio.volume = Math.max(0, Math.min(1, (voiceConfig.volumePercent ?? 100) / 100));
+        audio.volume = Math.max(0, Math.min(1, (currentVoiceConfig.volumePercent ?? 100) / 100));
         audio.onended = () => resolve();
         audio.onerror = () => resolve();
         void audio.play().catch(() => resolve());
@@ -643,10 +565,10 @@ export default function App() {
 
   const stopMic = async () => {
     (window as Window & { __cohost_recording_active?: boolean }).__cohost_recording_active = false;
-    if (browserSpeechRef.current) {
-      await browserSpeechRef.current.stop().catch(() => undefined);
-      await browserSpeechRef.current.dispose().catch(() => undefined);
-      browserSpeechRef.current = null;
+    if (speechEngineRef.current) {
+      await speechEngineRef.current.stop().catch(() => undefined);
+      await speechEngineRef.current.dispose().catch(() => undefined);
+      speechEngineRef.current = null;
     }
     setVoiceSession((state) => ({ ...state, status: 'idle', micEnabled: false, interimText: '' }));
   };
@@ -659,21 +581,22 @@ export default function App() {
     const sessionId = `vs_${Math.random().toString(36).slice(2, 10)}`;
     transcriptService.setStartedAt(Date.now());
     await transcriptService.reset();
-    setVoiceSession({ ...defaultVoiceSession(), sessionId, micEnabled: true, status: 'starting', engine: 'browser-speech' });
+    const initialEngineKind: SpeechEngine['kind'] = browserSpeechSupported() ? 'browser-speech' : 'local-fallback';
+    setVoiceSession({ ...defaultVoiceSession(), sessionId, micEnabled: true, status: 'starting', engine: initialEngineKind });
 
-    const engine = new BrowserSpeechEngine({
-      onInterim: (text) => {
+    const callbacks: VoiceSessionCallbacks = {
+      onInterim: (text: string) => {
         void transcriptService.pushInterim(text).then(({ interim, firstInterimLatencyMs }) => {
           setVoiceSession((state) => ({
             ...state,
             status: 'listening',
             interimText: interim,
             firstInterimLatencyMs: state.firstInterimLatencyMs ?? firstInterimLatencyMs,
-            engine: 'browser-speech'
+            engine: speechEngineRef.current?.kind ?? state.engine
           }));
         });
       },
-      onFinal: async (text) => {
+      onFinal: async (text: string) => {
         const normalized = await transcriptService.pushFinal(text);
         if (!normalized.committed) {
           setVoiceSession((state) => ({ ...state, interimText: '', droppedCount: state.droppedCount + 1 }));
@@ -690,20 +613,21 @@ export default function App() {
         const frame = await buildVoiceInputFrame({
           sessionId,
           mode: 'owner',
-          engine: 'browser-speech',
+          engine: speechEngineRef.current?.kind ?? 'none',
           transcript: normalized.committed,
           finalLatencyMs: normalized.finalLatencyMs
         });
         await submitVoiceSessionFrame(frame, null);
       },
-      onStatus: (nextStatus, detail) => {
+      onStatus: (nextStatus, detail?: string) => {
         setVoiceSession((state) => ({ ...state, status: nextStatus, lastError: nextStatus === 'error' ? detail ?? state.lastError : state.lastError }));
       },
-      onError: (message) => {
+      onError: (message: string) => {
         setVoiceSession((state) => ({ ...state, status: 'error', lastError: message }));
         flashBanner(`Mic error: ${message}`);
       },
       onSpeechStart: () => {
+        transcriptService.setStartedAt(Date.now());
         (window as Window & { __cohost_recording_active?: boolean }).__cohost_recording_active = true;
         stopSpeechPlayback();
         setVoiceSession((state) => ({ ...state, speakingBlocked: true }));
@@ -712,10 +636,35 @@ export default function App() {
         (window as Window & { __cohost_recording_active?: boolean }).__cohost_recording_active = false;
         setVoiceSession((state) => ({ ...state, speakingBlocked: false }));
       }
-    });
+    };
 
-    browserSpeechRef.current = engine;
-    await engine.start();
+    const buildEngine = (preferBrowser: boolean): SpeechEngine =>
+      preferBrowser && browserSpeechSupported()
+        ? new BrowserSpeechEngine(callbacks)
+        : new LocalFallbackSpeechEngine(callbacks);
+
+    let engine = buildEngine(true);
+    speechEngineRef.current = engine;
+    try {
+      await engine.start();
+      setVoiceSession((state) => ({ ...state, engine: engine.kind }));
+    } catch (error) {
+      if (engine.kind === 'browser-speech') {
+        const repairedRuntime = await ensureSttReady(voiceRuntime);
+        if (repairedRuntime) setVoiceRuntime(repairedRuntime);
+        engine = buildEngine(false);
+        speechEngineRef.current = engine;
+        await engine.start();
+        setVoiceSession((state) => ({ ...state, engine: engine.kind }));
+      } else if (browserSpeechSupported()) {
+        engine = buildEngine(true);
+        speechEngineRef.current = engine;
+        await engine.start();
+        setVoiceSession((state) => ({ ...state, engine: engine.kind }));
+      } else {
+        throw error;
+      }
+    }
   };
 
   const patchBehavior = async (patch: Partial<BehaviorSettings>) => {
@@ -724,10 +673,31 @@ export default function App() {
     await setBehaviorSettings(next);
   };
 
+  const persistCharacterState = async (next: CharacterStudioSettings, voiceNameOverride?: string | null) => {
+    const activeVoice = voiceNameOverride && voiceNameOverride !== 'auto'
+      ? voiceNameOverride
+      : voiceConfigRef.current.voiceName && voiceConfigRef.current.voiceName !== 'auto'
+        ? voiceConfigRef.current.voiceName
+        : findVoicePresetById(next.selectedPreset)?.defaultVoice
+          ?? voicePresets[0].defaultVoice;
+    await Promise.all([
+      setCharacterStudioSettings(next),
+      savePersonality(composeDirectProfile(next, activeVoice))
+    ]);
+  };
+
+  const scheduleCharacterPersistence = (next: CharacterStudioSettings) => {
+    if (characterPersistTimeoutRef.current) window.clearTimeout(characterPersistTimeoutRef.current);
+    characterPersistTimeoutRef.current = window.setTimeout(() => {
+      void persistCharacterState(next).catch(() => undefined);
+      characterPersistTimeoutRef.current = null;
+    }, 220);
+  };
+
   const patchCharacter = async (patch: Partial<CharacterStudioSettings>) => {
     const next = { ...character, ...patch };
     setCharacter(next);
-    await setCharacterStudioSettings(next);
+    scheduleCharacterPersistence(next);
   };
 
   const saveOauth = async () => {
@@ -754,13 +724,18 @@ export default function App() {
     flashBanner(`Cloud-only mode enabled with ${selectedModel}.`);
   };
 
-  const applyCharacterPreset = async () => {
-    const profile = composeProfile(activePreset, character);
-    await setTtsVoice(activePreset.defaultVoice);
-    setVoiceConfig((current) => ({ ...current, voiceName: activePreset.defaultVoice }));
-    await savePersonality(profile);
-    await setCharacterStudioSettings({ ...character, selectedPreset: activePreset.id });
-    flashBanner(`${activePreset.displayName} applied with ${voiceLabel(activePreset.defaultVoice)}.`);
+  const applyVoiceSelection = async (voiceName: string) => {
+    const preset = findVoicePresetByVoice(voiceName);
+    const nextCharacter = { ...character, selectedPreset: preset.id };
+    if (characterPersistTimeoutRef.current) window.clearTimeout(characterPersistTimeoutRef.current);
+    setCharacter(nextCharacter);
+    voiceConfigRef.current = { ...voiceConfigRef.current, voiceName };
+    setVoiceConfig((current) => ({ ...current, voiceName }));
+    await Promise.all([
+      setTtsVoice(voiceName),
+      persistCharacterState(nextCharacter, voiceName)
+    ]);
+    flashBanner(`Voice set to ${preset.displayName}.`);
   };
 
   const saveAvatarRig = async () => {
@@ -811,7 +786,7 @@ export default function App() {
       return;
     }
     const popup = new WebviewWindow(label, {
-      title: 'Character Stage',
+      title: 'Avatar Stage',
       url: '/?avatar=1',
       width: Math.max(180, avatarRig.popupWidth),
       height: Math.max(220, avatarRig.popupHeight),
@@ -909,20 +884,20 @@ export default function App() {
 
           <GlassCard className="glass-surface conversation-card">
             <div className="main-tab-header">
-              <GlassTabs value={mainTab} onValueChange={(value) => setMainTab(value as typeof mainTab)}>
-                <GlassTabsList className="folder-tabs-list main-folder-tabs">
-                  <GlassTabsTrigger className="folder-tab-trigger" value="chat">Chat Folder</GlassTabsTrigger>
-                  <GlassTabsTrigger className="folder-tab-trigger" value="twitch">Twitch Folder</GlassTabsTrigger>
-                  <GlassTabsTrigger className="folder-tab-trigger" value="cloud">Models Folder</GlassTabsTrigger>
-                  <GlassTabsTrigger className="folder-tab-trigger" value="character">Character Folder</GlassTabsTrigger>
-                  <GlassTabsTrigger className="folder-tab-trigger" value="settings">Settings Folder</GlassTabsTrigger>
-                </GlassTabsList>
-              </GlassTabs>
+                <GlassTabs value={mainTab} onValueChange={(value) => setMainTab(value as typeof mainTab)}>
+                  <GlassTabsList className="folder-tabs-list main-folder-tabs">
+                    <GlassTabsTrigger className="folder-tab-trigger" value="chat">Chat</GlassTabsTrigger>
+                    <GlassTabsTrigger className="folder-tab-trigger" value="twitch">Twitch</GlassTabsTrigger>
+                    <GlassTabsTrigger className="folder-tab-trigger" value="cloud">Models</GlassTabsTrigger>
+                    <GlassTabsTrigger className="folder-tab-trigger" value="voice">Voice</GlassTabsTrigger>
+                    <GlassTabsTrigger className="folder-tab-trigger" value="settings">Settings</GlassTabsTrigger>
+                  </GlassTabsList>
+                </GlassTabs>
               <div className="tab-caption">
                 {mainTab === 'chat' && 'Main conversation window with local chat, Twitch chat send, mic, and live feed.'}
                 {mainTab === 'twitch' && 'OAuth, bot account, streamer account, and Twitch chat connection.'}
                 {mainTab === 'cloud' && 'Curated conversational and uncensored Ollama cloud picks only.'}
-                {mainTab === 'character' && 'Personality package, tuning, avatar image, and embedded character stage.'}
+                {mainTab === 'voice' && 'Direct voice selection plus tone sliders that shape the model response style.'}
                 {mainTab === 'settings' && 'Voice, pacing, and runtime diagnostics. No duplicate controls elsewhere.'}
               </div>
             </div>
@@ -1108,60 +1083,56 @@ export default function App() {
             ) : null}
 
 
-            {mainTab === 'character' ? (
+            {mainTab === 'voice' ? (
               <div className="character-pane">
                 <div className="subtab-row">
                   <GlassTabs value={characterTab} onValueChange={(value) => setCharacterTab(value as typeof characterTab)}>
                     <GlassTabsList className="folder-tabs-list">
-                      <GlassTabsTrigger className="folder-tab-trigger" value="persona">Persona Folder</GlassTabsTrigger>
-                      <GlassTabsTrigger className="folder-tab-trigger" value="stage">Rig & Stage Folder</GlassTabsTrigger>
+                      <GlassTabsTrigger className="folder-tab-trigger" value="voice">Voice & Tone</GlassTabsTrigger>
+                      <GlassTabsTrigger className="folder-tab-trigger" value="stage">Avatar Stage</GlassTabsTrigger>
                     </GlassTabsList>
                   </GlassTabs>
                 </div>
 
-                {characterTab === 'persona' ? (
+                {characterTab === 'voice' ? (
                   <div className="panel-stack">
-                    <div className="preset-grid">
-                      {characterPresets.map((preset) => (
-                        <button key={preset.id} type="button" className={`preset-tile ${character.selectedPreset === preset.id ? 'active' : ''}`} onClick={() => void patchCharacter({ ...preset.tuning, selectedPreset: preset.id })}>
-                          <span className="preset-name">{preset.displayName}</span>
-                          <span className="preset-meta">{preset.category} · {voiceLabel(preset.defaultVoice)}</span>
-                        </button>
-                      ))}
-                    </div>
                     <div className="two-col-grid persona-summary-grid">
                       <GlassCard className="glass-surface inset-card">
                         <div className="inset-content">
-                          <div className="section-title">Selected Character</div>
-                          <div className="selected-name">{activePreset.displayName}</div>
-                          <div className="panel-copy">{activePreset.description}</div>
-                          <div className="inline-badges">
-                            <GlassBadge variant="primary">{activePreset.category}</GlassBadge>
-                            <GlassBadge variant="outline">{activePreset.voiceSummary}</GlassBadge>
-                          </div>
-                        </div>
-                      </GlassCard>
-                      <GlassCard className="glass-surface inset-card">
-                        <div className="inset-content">
-                          <div className="section-title">Default Voice</div>
-                          <LabeledField label="Character voice">
-                            <GlassSelect value={voiceConfig.voiceName || activePreset.defaultVoice} onValueChange={(value) => {
-                              setVoiceConfig((current) => ({ ...current, voiceName: value }));
-                              void setTtsVoice(value);
-                            }}>
+                          <div className="section-title">Voice</div>
+                          <LabeledField label="Select voice" hint="Low and mid-range voices only. Saves immediately.">
+                            <GlassSelect value={voiceConfig.voiceName || activePreset.defaultVoice} onValueChange={(value) => void applyVoiceSelection(value)}>
                               <GlassSelectTrigger>
-                                <GlassSelectValue placeholder="Select a voice" />
+                                <GlassSelectValue placeholder="Select voice" />
                               </GlassSelectTrigger>
                               <GlassSelectContent>
                                 <GlassSelectGroup>
-                                  {voiceOptions.map((voice) => (
-                                    <GlassSelectItem key={voice.value} value={voice.value}>{voice.label}</GlassSelectItem>
+                                  {voicePresets.map((preset) => (
+                                    <GlassSelectItem key={preset.id} value={preset.defaultVoice}>
+                                      {preset.displayName} · {voiceLabel(preset.defaultVoice)}
+                                    </GlassSelectItem>
                                   ))}
                                 </GlassSelectGroup>
                               </GlassSelectContent>
                             </GlassSelect>
                           </LabeledField>
+                          <div className="selected-name">{activePreset.displayName}</div>
                           <div className="panel-copy">{activePreset.voiceSummary}</div>
+                          <div className="inline-badges">
+                            <GlassBadge variant="primary">{voiceLabel(activePreset.defaultVoice)}</GlassBadge>
+                            <GlassBadge variant="outline">{voiceConfig.enabled ? 'TTS enabled' : 'TTS muted'}</GlassBadge>
+                          </div>
+                        </div>
+                      </GlassCard>
+                      <GlassCard className="glass-surface inset-card">
+                        <div className="inset-content">
+                          <div className="section-title">Direct Model Tone</div>
+                          <div className="panel-copy">These sliders write straight into the active model prompt. No preset personalities, no hidden voice pairing.</div>
+                          <div className="inline-badges">
+                            <GlassBadge variant="outline">Warmth {Math.round(character.warmth)}</GlassBadge>
+                            <GlassBadge variant="outline">Humor {Math.round(character.humor)}</GlassBadge>
+                            <GlassBadge variant="outline">Edge {Math.round(character.edge)}</GlassBadge>
+                          </div>
                         </div>
                       </GlassCard>
                     </div>
@@ -1173,12 +1144,9 @@ export default function App() {
                       <SliderField label="Energy" value={character.energy} min={0} max={100} onChange={(value) => void patchCharacter({ energy: value })} />
                       <SliderField label="Story" value={character.story} min={0} max={100} onChange={(value) => void patchCharacter({ story: value })} />
                     </div>
-                    <LabeledField label="Extra direction" hint="This gets merged into the active personality prompt.">
+                    <LabeledField label="Extra direction" hint="Merged directly into the live model instruction.">
                       <GlassTextarea value={character.extraDirection} onChange={(event) => void patchCharacter({ extraDirection: event.currentTarget.value })} className="short-textarea" />
                     </LabeledField>
-                    <div className="action-grid">
-                      <GlassButton variant="primary" onClick={() => void applyCharacterPreset()}><IconWand size={16} />Apply Character</GlassButton>
-                    </div>
                   </div>
                 ) : null}
 

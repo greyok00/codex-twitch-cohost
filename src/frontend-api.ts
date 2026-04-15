@@ -12,6 +12,7 @@ import type {
   ChatMessage,
   EventMessage,
   PersonalityProfile,
+  SttAutoConfigResult,
   TwitchOauthSettings,
   TtsVoiceSettings,
   VoiceInputFrame,
@@ -109,6 +110,10 @@ export function setTtsVolume(volumePercent: number): Promise<void> {
 
 export function verifyVoiceRuntime(): Promise<VoiceRuntimeReport> {
   return invoke('verify_voice_runtime');
+}
+
+export function autoConfigureSttFast(): Promise<SttAutoConfigResult> {
+  return invoke('auto_configure_stt_fast');
 }
 
 export function setVoiceEnabled(enabled: boolean): Promise<void> {
